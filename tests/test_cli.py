@@ -4,8 +4,9 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from burhan.cli import main
 
@@ -101,6 +102,70 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["patch"]["verification"]["grade"], "V0")
         self.assertIn("mesage", payload["patch"]["diff"])
         self.assertEqual(unchanged, source_text)
+
+    def test_repair_proof_command_reports_fail_to_pass_without_modifying_project(self) -> None:
+        source_text = "def message():\n    return 'ok'\n\nprint(mesage())\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "main.py"
+            source.write_text(source_text, encoding="utf-8")
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "repair-proof",
+                        "--project",
+                        str(root),
+                        "--goal",
+                        "أثبت الإصلاح دون تغيير الأصل",
+                        "--error",
+                        "  File \"main.py\", line 4, in <module>\n"
+                        "NameError: name 'mesage' is not defined",
+                        "--trust-local-tests",
+                        "--test-program",
+                        "python",
+                        "--test-arg",
+                        "main.py",
+                        "--json",
+                    ]
+                )
+
+            payload = json.loads(output.getvalue())
+            unchanged = source.read_text(encoding="utf-8")
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["proof"]["verified"])
+        self.assertEqual(payload["proof"]["verification"]["grade"], "V1")
+        self.assertNotEqual(payload["proof"]["before"]["exit_code"], 0)
+        self.assertEqual(payload["proof"]["after"]["exit_code"], 0)
+        self.assertTrue(payload["proof"]["original_unchanged"])
+        self.assertEqual(unchanged, source_text)
+
+    def test_repair_proof_reports_original_change_without_traceback(self) -> None:
+        source_text = "def message():\n    return 'ok'\n\nprint(mesage())\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.py").write_text(source_text, encoding="utf-8")
+            stderr = io.StringIO()
+
+            with patch("burhan.cli.ProofRunner.prove", side_effect=RuntimeError("original changed")):
+                with redirect_stderr(stderr):
+                    exit_code = main(
+                        [
+                            "repair-proof",
+                            "--project",
+                            str(root),
+                            "--goal",
+                            "prove repair",
+                            "--error",
+                            'File "main.py", line 4\nNameError: name \'mesage\' is not defined',
+                            "--trust-local-tests",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("original changed", stderr.getvalue())
 
     def test_memory_add_and_search_commands_return_verified_match(self) -> None:
         from tests.test_memory import episode_payload

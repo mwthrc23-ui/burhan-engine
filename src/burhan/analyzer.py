@@ -25,7 +25,7 @@ TS_DIAGNOSTIC = re.compile(
     r"(?P<code>TS\d+):\s*(?P<message>.+)"
 )
 TS_UNKNOWN_NAME = re.compile(r"Cannot find name\s+['\"](?P<name>[^'\"]+)['\"]")
-ENGINE_VERSION = "0.2.0"
+ENGINE_VERSION = "0.5.0"
 
 
 class BurhanAnalyzer:
