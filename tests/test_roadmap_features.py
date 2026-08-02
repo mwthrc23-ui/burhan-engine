@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import time
@@ -311,21 +313,25 @@ class MemoryPromoteTests(unittest.TestCase):
             "runtime": "burhan-pytest@sha256:1111111111111111111111111111111111111111111111111111111111111111",
         }
 
-    def test_promote_succeeds_with_v2_proof(self) -> None:
+    def test_promote_rejects_self_asserted_v2_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
             proof.write_text(json.dumps(self._proof_payload()), encoding="utf-8")
             db = Path(tmp) / "mem.db"
-            code = self._run([
-                "memory-promote",
-                "--database", str(db),
-                "--episode", str(ep),
-                "--proof", str(proof),
-                "--human-review-note", "مراجع: محمد",
-            ])
-            self.assertEqual(code, 0)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = self._run([
+                    "memory-promote",
+                    "--database", str(db),
+                    "--episode", str(ep),
+                    "--proof", str(proof),
+                    "--human-review-note", "مراجع: محمد",
+                ])
+            self.assertEqual(code, 2)
+            self.assertIn("معطلة", stderr.getvalue())
+            self.assertFalse(db.exists())
 
     def test_promote_rejected_with_v1_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -363,16 +369,15 @@ class MemoryPromoteTests(unittest.TestCase):
             ])
             self.assertEqual(code, 2)
 
-    def test_promote_json_output(self) -> None:
-        import io, contextlib
+    def test_promote_json_mode_still_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
             proof.write_text(json.dumps(self._proof_payload()), encoding="utf-8")
             db = Path(tmp) / "mem.db"
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
                 code = self._run([
                     "memory-promote",
                     "--database", str(db),
@@ -381,14 +386,11 @@ class MemoryPromoteTests(unittest.TestCase):
                     "--human-review-note", "مراجع: علي",
                     "--json",
                 ])
-            self.assertEqual(code, 0)
-            result = json.loads(buf.getvalue())
-            self.assertEqual(result["promoted"], "ep-promote-001")
-            self.assertEqual(result["grade"], "V2")
-            self.assertIn("human_review_note", result)
+            self.assertEqual(code, 2)
+            self.assertIn("معطلة", stderr.getvalue())
+            self.assertFalse(db.exists())
 
-    def test_promote_wrapped_proof_json(self) -> None:
-        """يجب أن يقبل الـ proof المغلّف داخل {"analysis":..., "proof":...}."""
+    def test_promote_rejects_wrapped_self_asserted_proof_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
@@ -396,14 +398,41 @@ class MemoryPromoteTests(unittest.TestCase):
             wrapped = {"analysis": {}, "proof": self._proof_payload()}
             proof.write_text(json.dumps(wrapped), encoding="utf-8")
             db = Path(tmp) / "mem.db"
-            code = self._run([
-                "memory-promote",
-                "--database", str(db),
-                "--episode", str(ep),
-                "--proof", str(proof),
-                "--human-review-note", "مراجع: سارة",
-            ])
-            self.assertEqual(code, 0)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = self._run([
+                    "memory-promote",
+                    "--database", str(db),
+                    "--episode", str(ep),
+                    "--proof", str(proof),
+                    "--human-review-note", "مراجع: سارة",
+                ])
+            self.assertEqual(code, 2)
+            self.assertIn("معطلة", stderr.getvalue())
+            self.assertFalse(db.exists())
+
+    def test_promote_rejects_boolean_exit_code_spoof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ep = Path(tmp) / "ep.json"
+            ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["before"]["exit_code"] = True
+            proof_payload["after"]["exit_code"] = False
+            proof = Path(tmp) / "proof.json"
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
+            db = Path(tmp) / "mem.db"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = self._run([
+                    "memory-promote",
+                    "--database", str(db),
+                    "--episode", str(ep),
+                    "--proof", str(proof),
+                    "--human-review-note", "مراجع: أمني",
+                ])
+            self.assertEqual(code, 2)
+            self.assertIn("معطلة", stderr.getvalue())
+            self.assertFalse(db.exists())
 
     def test_promote_rejects_local_backend_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

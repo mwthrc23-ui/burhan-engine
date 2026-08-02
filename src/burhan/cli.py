@@ -4,19 +4,17 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Sequence
 
 from .analyzer import ENGINE_VERSION, BurhanAnalyzer
-from .memory import MemoryQuery, RepairEpisode, RepairMemory
+from .memory import MemoryQuery, RepairMemory
 from .patcher import (
-    CommandRun,
     DEFAULT_DOCKER_IMAGE,
     PYTEST_DOCKER_IMAGE,
     PatchEngine,
     PatchResult,
     ProofResult,
     ProofRunner,
-    VerificationResult,
     inject_test_evidence,
 )
 from .sources import (
@@ -74,15 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
     proof.add_argument("--backend", choices=("local", "docker"), default="local")
     proof.add_argument("--docker-image", default=DEFAULT_DOCKER_IMAGE)
     proof.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
-    memory_add = subcommands.add_parser("memory-add", help="أضف حالة إصلاح موثقة إلى الذاكرة")
+    memory_add = subcommands.add_parser(
+        "memory-add",
+        help="إضافة JSON مباشرة معطلة مؤقتًا حتى تُفصل الحالات غير الموثوقة عن الذاكرة المرقّاة",
+    )
     memory_add.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
     memory_add.add_argument("--episode", type=Path, required=True, help="ملف RepairEpisode بصيغة JSON")
     memory_add.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
     memory_promote = subcommands.add_parser(
         "memory-promote",
         help=(
-            "بوابة ترقية: أضف حالة إصلاح إلى الذاكرة فقط إذا كان إثباتها V2 "
-            "وتضمّنت مراجعة بشرية موثّقة"
+            "بوابة ترقية V2 معطلة مؤقتًا حتى يمكن إعادة إثبات الحلقة وربطها بالرقعة"
         ),
     )
     memory_promote.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
@@ -231,89 +231,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _memory_add(args: argparse.Namespace) -> int:
-    try:
-        payload = json.loads(_read_limited_text(args.episode, limit=1_000_000))
-        if not isinstance(payload, dict):
-            raise ValueError("episode JSON must contain an object")
-        episode = RepairEpisode.from_dict(payload)
-        memory = RepairMemory(args.database)
-        memory.add(episode)
-        result = {"stored": episode.id, "episodes": memory.count()}
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
-        print(f"خطأ: {error}", file=sys.stderr)
-        return 2
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(
-            f"أضيفت الحالة: {_terminal_text(episode.id)} | "
-            f"إجمالي الحالات: {result['episodes']}"
-        )
-    return 0
+    """Reject untrusted JSON until storage distinguishes staged and promoted episodes."""
+    del args
+    print(
+        "خطأ: memory-add معطلة مؤقتًا؛ ملفات RepairEpisode المقدمة من المستخدم "
+        "لا يجوز أن تتجاوز بوابة الترقية أو تُكتب في الذاكرة الموثوقة مباشرة.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _memory_promote(args: argparse.Namespace) -> int:
-    """بوابة الترقية: تقبل الحالة فقط إذا كان الإثبات V2 وتوجد مراجعة بشرية."""
-    review_note = (args.human_review_note or "").strip()
-    if not review_note:
-        print("خطأ: --human-review-note يجب أن يحتوي على نص غير فارغ", file=sys.stderr)
-        return 2
-    try:
-        episode_payload = json.loads(_read_limited_text(args.episode, limit=1_000_000))
-        if not isinstance(episode_payload, dict):
-            raise ValueError("episode JSON must contain an object")
-        episode = RepairEpisode.from_dict(episode_payload)
-
-        proof_payload = json.loads(_read_limited_text(args.proof, limit=1_000_000))
-        if not isinstance(proof_payload, dict):
-            raise ValueError("proof JSON must contain an object")
-
-        proof = _load_proof_result(proof_payload)
-        grade = proof.verification.grade
-        if not proof.verified:
-            raise ValueError(
-                f"الإثبات غير مكتمل (verified=false) — "
-                "يتطلب memory-promote إثباتًا ناجحًا"
-            )
-        if grade != "V2":
-            raise ValueError(
-                f"درجة الإثبات هي '{grade}' لكن بوابة الترقية تتطلب V2. "
-                "شغّل repair-proof --backend docker للحصول على V2."
-            )
-        if proof.backend != "docker":
-            raise ValueError("بوابة الترقية تتطلب ProofResult صادرًا من backend=docker")
-        if proof.before.timed_out or proof.before.exit_code == 0:
-            raise ValueError("بوابة الترقية تتطلب فشل الاختبار قبل الرقعة داخل الإثبات")
-        if proof.after.timed_out or proof.after.exit_code != 0:
-            raise ValueError("بوابة الترقية تتطلب نجاح الاختبار نفسه بعد الرقعة")
-        if not proof.original_unchanged:
-            raise ValueError("بوابة الترقية تتطلب بقاء الملف الأصلي دون تغيير")
-        required_checks = {"test_failed_before_patch", "test_passed_after_patch", "original_unchanged"}
-        if not required_checks.issubset(proof.verification.checks):
-            raise ValueError("إثبات V2 يفتقد checks إلزامية لانتقال الفشل إلى النجاح")
-
-        memory = RepairMemory(args.database)
-        memory.add(episode)
-        result = {
-            "promoted": episode.id,
-            "grade": grade,
-            "human_review_note": review_note,
-            "episodes": memory.count(),
-        }
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
-        print(f"خطأ في بوابة الترقية: {error}", file=sys.stderr)
-        return 2
-
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(
-            f"✓ رُقّيت الحالة: {_terminal_text(episode.id)} | "
-            f"الدرجة: {grade} | "
-            f"إجمالي الحالات: {result['episodes']}"
-        )
-        print(f"  ملاحظة المراجع: {_terminal_text(review_note)}")
-    return 0
+    """Fail closed until the proof can be re-run and bound to the episode."""
+    del args
+    print(
+        "خطأ: memory-promote معطلة مؤقتًا؛ ProofRunner لا يستطيع حاليًا إعادة إثبات "
+        "نطاق AttributeError وربط الإثبات بالحلقة والرقعة. لا تُقبل ملفات ProofResult "
+        "المقدمة من المستخدم بوصفها مصدر ثقة.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _repair_proof(args: argparse.Namespace) -> int:
@@ -377,58 +314,6 @@ def _resolve_proof_docker_image(*, test_program: str, backend: str, docker_image
             "مرر --docker-image بصورة pytest مثبتة أو حدّث PYTEST_DOCKER_IMAGE."
         )
     return selected_image
-
-
-def _load_proof_result(payload: Mapping[str, Any]) -> ProofResult:
-    proof_value = payload.get("proof", payload)
-    proof_data = _required_mapping(proof_value, "proof")
-    verification_value = _required_mapping(proof_data.get("verification"), "verification")
-    patch_value = _required_mapping(proof_data.get("patch"), "patch")
-    patch_verification = _required_mapping(patch_value.get("verification"), "patch.verification")
-    return ProofResult(
-        verified=_required_bool(proof_data.get("verified"), "verified"),
-        command=_required_text_tuple(proof_data.get("command"), "command"),
-        before=_load_command_run(proof_data.get("before"), "before"),
-        after=_load_command_run(proof_data.get("after"), "after"),
-        patch=PatchResult(
-            diff=_required_text(patch_value, "diff", allow_empty=True),
-            changed_files=_required_text_tuple(patch_value.get("changed_files"), "patch.changed_files"),
-            applied=_required_bool(patch_value.get("applied"), "patch.applied"),
-            artifact_hash=_required_text(patch_value, "artifact_hash"),
-            verification=_load_verification_result(patch_verification, "patch.verification"),
-        ),
-        original_unchanged=_required_bool(proof_data.get("original_unchanged"), "original_unchanged"),
-        verification=_load_verification_result(verification_value, "verification"),
-        backend=_required_text(proof_data, "backend"),
-        runtime=_required_text(proof_data, "runtime"),
-    )
-
-
-def _load_command_run(value: object, field_name: str) -> CommandRun:
-    data = _required_mapping(value, field_name)
-    exit_code = data.get("exit_code")
-    if exit_code is not None and not isinstance(exit_code, int):
-        raise ValueError(f"{field_name}.exit_code must be an integer or null")
-    duration_ms = data.get("duration_ms")
-    if not isinstance(duration_ms, (int, float)) or isinstance(duration_ms, bool):
-        raise ValueError(f"{field_name}.duration_ms must be numeric")
-    return CommandRun(
-        exit_code=exit_code,
-        timed_out=_required_bool(data.get("timed_out"), f"{field_name}.timed_out"),
-        duration_ms=float(duration_ms),
-        stdout=_required_text(data, "stdout", allow_empty=True),
-        stderr=_required_text(data, "stderr", allow_empty=True),
-        output_truncated=_required_bool(data.get("output_truncated"), f"{field_name}.output_truncated"),
-    )
-
-
-def _load_verification_result(value: object, field_name: str) -> VerificationResult:
-    data = _required_mapping(value, field_name)
-    return VerificationResult(
-        grade=_required_text(data, "grade"),
-        checks=_required_text_tuple(data.get("checks"), f"{field_name}.checks"),
-        limitations=_required_text_tuple(data.get("limitations"), f"{field_name}.limitations"),
-    )
 
 
 def _memory_search(args: argparse.Namespace) -> int:
@@ -617,32 +502,6 @@ def _read_swebench_rows(path: Path) -> tuple[dict[str, object], ...]:
             raise ValueError("each SWE-bench row must be an object")
         rows.append(row)
     return tuple(rows)
-
-
-def _required_mapping(value: object, field_name: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{field_name} must be an object")
-    return value
-
-
-def _required_text(mapping: Mapping[str, Any], field_name: str, *, allow_empty: bool = False) -> str:
-    value = mapping.get(field_name)
-    if not isinstance(value, str) or (not allow_empty and not value):
-        message = "a string" if allow_empty else "a non-empty string"
-        raise ValueError(f"{field_name} must be {message}")
-    return value
-
-
-def _required_bool(value: object, field_name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a boolean")
-    return value
-
-
-def _required_text_tuple(value: object, field_name: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-        raise ValueError(f"{field_name} must be a list of non-empty strings")
-    return tuple(value)
 
 
 def _read_limited_text(path: Path, *, limit: int) -> str:

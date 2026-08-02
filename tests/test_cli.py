@@ -238,7 +238,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("صورة pytest مثبتة", stderr.getvalue())
 
-    def test_memory_add_and_search_commands_return_verified_match(self) -> None:
+    def test_memory_add_rejects_user_supplied_episode(self) -> None:
         from tests.test_memory import episode_payload
 
         with tempfile.TemporaryDirectory() as directory:
@@ -256,8 +256,8 @@ class CliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            add_output = io.StringIO()
-            with redirect_stdout(add_output):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
                 add_code = main(
                     [
                         "memory-add",
@@ -268,6 +268,27 @@ class CliTests(unittest.TestCase):
                         "--json",
                     ]
                 )
+        self.assertEqual(add_code, 2)
+        self.assertIn("معطلة", stderr.getvalue())
+        self.assertFalse(database.exists())
+
+    def test_memory_search_command_returns_preverified_match(self) -> None:
+        from burhan.memory import RepairEpisode, RepairMemory
+        from tests.test_memory import episode_payload
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "memory.sqlite3"
+            RepairMemory(database).add(
+                RepairEpisode.from_dict(
+                    episode_payload(
+                        episode_id="episode-send",
+                        attribute="send",
+                        replacement="send_message",
+                        title="Client send API rename",
+                    )
+                )
+            )
             search_output = io.StringIO()
             with redirect_stdout(search_output):
                 search_code = main(
@@ -285,11 +306,8 @@ class CliTests(unittest.TestCase):
                     ]
                 )
 
-        add_payload = json.loads(add_output.getvalue())
         search_payload = json.loads(search_output.getvalue())
-        self.assertEqual(add_code, 0)
         self.assertEqual(search_code, 0)
-        self.assertEqual(add_payload["stored"], "episode-send")
         self.assertEqual(search_payload["matches"][0]["episode"]["id"], "episode-send")
         self.assertEqual(
             search_payload["matches"][0]["episode"]["patch_pattern"]["to"],
