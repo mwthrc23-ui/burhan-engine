@@ -3,7 +3,7 @@
 from .analyzer import BurhanAnalyzer
 from .model import AnalysisResult, BirEdge, BirNode, BurhanState, Evidence, Hypothesis, NodeKind, Provenance
 from .memory import MemoryMatch, MemoryQuery, RepairEpisode, RepairMemory
-from .patcher import PatchEngine, PatchResult, VerificationResult
+from .patcher import CommandRun, PatchEngine, PatchResult, ProofResult, ProofRunner, VerificationResult
 
 __all__ = [
     "AnalysisResult",
@@ -11,6 +11,7 @@ __all__ = [
     "BirNode",
     "BurhanAnalyzer",
     "BurhanState",
+    "CommandRun",
     "Evidence",
     "Hypothesis",
     "NodeKind",
@@ -18,10 +19,12 @@ __all__ = [
     "MemoryQuery",
     "PatchEngine",
     "PatchResult",
+    "ProofResult",
+    "ProofRunner",
     "Provenance",
     "RepairEpisode",
     "RepairMemory",
     "VerificationResult",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

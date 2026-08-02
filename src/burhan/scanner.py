@@ -40,6 +40,16 @@ SECRET_FILE_NAMES = frozenset(
 )
 
 
+def is_secret_file(path: Path) -> bool:
+    name = path.name.lower()
+    return name in SECRET_FILE_NAMES or name.startswith(".env.") or path.suffix.lower() in {
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ScanLimits:
     max_files: int = 500
@@ -92,7 +102,7 @@ class ProjectScanner:
             )
             for name in sorted(names):
                 path = Path(current) / name
-                if self._is_secret(path):
+                if is_secret_file(path):
                     skipped_secrets += 1
                     continue
                 if path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.is_symlink():
@@ -130,10 +140,4 @@ class ProjectScanner:
 
     @staticmethod
     def _is_secret(path: Path) -> bool:
-        name = path.name.lower()
-        return name in SECRET_FILE_NAMES or name.startswith(".env.") or path.suffix.lower() in {
-            ".pem",
-            ".key",
-            ".p12",
-            ".pfx",
-        }
+        return is_secret_file(path)

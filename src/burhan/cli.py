@@ -8,7 +8,7 @@ from typing import Sequence
 
 from .analyzer import BurhanAnalyzer
 from .memory import MemoryQuery, RepairEpisode, RepairMemory
-from .patcher import PatchEngine, PatchResult
+from .patcher import DEFAULT_DOCKER_IMAGE, PatchEngine, PatchResult, ProofResult, ProofRunner
 from .sources import (
     BugsInPySource,
     GitHubPullRequestSource,
@@ -32,6 +32,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_case_arguments(repair)
     repair.add_argument("--apply", action="store_true", help="طبّق patch بعد اجتياز تحقق V0")
     repair.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    proof = subcommands.add_parser(
+        "repair-proof",
+        help="أثبت انتقال اختبار موثوق من الفشل إلى النجاح دون تعديل الأصل",
+    )
+    _add_case_arguments(proof)
+    proof.add_argument(
+        "--trust-local-tests",
+        action="store_true",
+        help="أقر بأن أمر الاختبار من مشروع محلي موثوق",
+    )
+    proof.add_argument("--test-program", choices=("python", "pytest"), default="python")
+    proof.add_argument("--test-arg", action="append", default=[])
+    proof.add_argument("--timeout", type=float, default=30.0)
+    proof.add_argument("--backend", choices=("local", "docker"), default="local")
+    proof.add_argument("--docker-image", default=DEFAULT_DOCKER_IMAGE)
+    proof.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
     memory_add = subcommands.add_parser("memory-add", help="أضف حالة إصلاح موثقة إلى الذاكرة")
     memory_add.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
     memory_add.add_argument("--episode", type=Path, required=True, help="ملف RepairEpisode بصيغة JSON")
@@ -121,6 +137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _source_import_github_pr(args)
     if args.command == "source-search":
         return _source_search(args)
+    if args.command == "repair-proof":
+        return _repair_proof(args)
     try:
         error_text = _read_error(args.error, args.error_file)
         result = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
@@ -135,7 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     dependencies=tuple(args.dependency),
                 )
             )
-    except (OSError, UnicodeError, ValueError) as error:
+    except (OSError, RuntimeError, UnicodeError, ValueError) as error:
         print(f"خطأ: {error}", file=sys.stderr)
         return 2
 
@@ -177,6 +195,44 @@ def _memory_add(args: argparse.Namespace) -> int:
             f"أضيفت الحالة: {_terminal_text(episode.id)} | "
             f"إجمالي الحالات: {result['episodes']}"
         )
+    return 0
+
+
+def _repair_proof(args: argparse.Namespace) -> int:
+    if not args.trust_local_tests:
+        print(
+            "خطأ: يتطلب الإثبات إقرار --trust-local-tests لأن الاختبار ينفذ كود المشروع",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        error_text = _read_error(args.error, args.error_file)
+        analysis = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
+        default_args = ("app.py",) if args.test_program == "python" else ("-q",)
+        proof = ProofRunner().prove(
+            args.project,
+            analysis.primary,
+            test_program=args.test_program,
+            test_args=tuple(args.test_arg) or default_args,
+            timeout_seconds=args.timeout,
+            backend=args.backend,
+            docker_image=args.docker_image,
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as error:
+        print(f"لم يثبت الإصلاح: {error}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(
+            json.dumps(
+                {"analysis": analysis.to_dict(), "proof": proof.to_dict()},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        _print_analysis(analysis)
+        _print_proof(proof)
     return 0
 
 
@@ -443,6 +499,15 @@ def _print_patch(patch: PatchResult) -> None:
     print(f"التحقق: {patch.verification.grade}")
     print(f"الحالة: {'طُبق' if patch.applied else 'معاينة فقط'}")
     print(_terminal_text(patch.diff, multiline=True))
+
+
+def _print_proof(proof: ProofResult) -> None:
+    print(f"درجة الإثبات: {proof.verification.grade}")
+    print(f"البيئة: {_terminal_text(proof.backend)} | {_terminal_text(proof.runtime)}")
+    print(f"قبل الرقعة: exit={proof.before.exit_code}")
+    print(f"بعد الرقعة: exit={proof.after.exit_code}")
+    print(f"المشروع الأصلي دون تغيير: {'نعم' if proof.original_unchanged else 'لا'}")
+    print(_terminal_text(proof.patch.diff, multiline=True))
 
 
 def _print_memory_matches(matches: object) -> None:
