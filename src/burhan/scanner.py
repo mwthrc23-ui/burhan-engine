@@ -137,7 +137,3 @@ class ProjectScanner:
             skipped_oversized_files=skipped_oversized,
             truncated=truncated,
         )
-
-    @staticmethod
-    def _is_secret(path: Path) -> bool:
-        return is_secret_file(path)

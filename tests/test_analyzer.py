@@ -74,6 +74,47 @@ NameError: name 'grete' is not defined
         self.assertIn("TS2322", result.primary.explanation)
         self.assertGreaterEqual(result.confidence, 0.5)
 
+    def test_typescript_unknown_name_suggests_closest_symbol(self) -> None:
+        error = "src/index.ts(3,7): error TS2304: Cannot find name 'grete'."
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src"
+            source.mkdir()
+            (source / "index.ts").write_text(
+                "function greet(name: string) { return `Hi ${name}`; }\n"
+                "const value = grete('Ada');\n",
+                encoding="utf-8",
+            )
+
+            result = BurhanAnalyzer().analyze(root, "شخّص خطأ TypeScript", error)
+
+        self.assertEqual(result.primary.kind, "undefined_name")
+        self.assertEqual(result.primary.target, "grete")
+        self.assertEqual(result.primary.suggested_replacement, "greet")
+        self.assertEqual(result.primary.location, "src/index.ts:3:7")
+
+    def test_typescript_missing_property_maps_to_missing_property_hypothesis(self) -> None:
+        error = (
+            "src/client.ts(8,15): error TS2339: "
+            "Property 'send' does not exist on type 'ApiClient'."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src"
+            source.mkdir()
+            (source / "client.ts").write_text(
+                "class ApiClient { sendMessage(payload: string) { return payload; } }\n",
+                encoding="utf-8",
+            )
+
+            result = BurhanAnalyzer().analyze(root, "شخّص خطأ TypeScript", error)
+
+        self.assertEqual(result.primary.kind, "missing_property")
+        self.assertEqual(result.primary.target, "send")
+        self.assertEqual(result.primary.location, "src/client.ts:8:15")
+        self.assertIn("ApiClient", result.primary.explanation)
+        self.assertTrue(result.questions)
+
     def test_python_attribute_error_extracts_the_missing_attribute(self) -> None:
         error = """\
 Traceback (most recent call last):

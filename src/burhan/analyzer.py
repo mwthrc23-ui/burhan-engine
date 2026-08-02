@@ -25,6 +25,10 @@ TS_DIAGNOSTIC = re.compile(
     r"(?P<code>TS\d+):\s*(?P<message>.+)"
 )
 TS_UNKNOWN_NAME = re.compile(r"Cannot find name\s+['\"](?P<name>[^'\"]+)['\"]")
+TS_PROPERTY_MISSING = re.compile(
+    r"Property\s+['\"](?P<name>[^'\"]+)['\"]\s+does not exist on type\s+['\"](?P<type>[^'\"]+)['\"]"
+)
+JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
 ENGINE_VERSION = "0.5.0"
 
 
@@ -116,10 +120,7 @@ class BurhanAnalyzer:
             return tuple(dict.fromkeys(names))
 
         if source.relative_path.endswith((".ts", ".tsx", ".js", ".jsx")):
-            pattern = re.compile(
-                r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)"
-            )
-            return tuple(dict.fromkeys(pattern.findall(source.content)))
+            return tuple(dict.fromkeys(JS_SYMBOL_PATTERN.findall(source.content)))
         return ()
 
     @staticmethod
@@ -197,26 +198,7 @@ class BurhanAnalyzer:
 
         ts_match = TS_DIAGNOSTIC.search(error_text)
         if ts_match:
-            code = ts_match.group("code")
-            message = ts_match.group("message").strip()
-            location = (
-                f"{self._normalize_path(ts_match.group('file').strip())}:"
-                f"{ts_match.group('line')}:{ts_match.group('column')}"
-            )
-            unknown_name = TS_UNKNOWN_NAME.search(message)
-            target = unknown_name.group("name") if unknown_name else code
-            replacement = self._closest_symbol(target, symbols) if unknown_name else None
-            kind = "undefined_name" if code == "TS2304" or unknown_name else "type_mismatch" if code == "TS2322" else "typescript_diagnostic"
-            evidence = (Evidence("typescript", f"{code}: {message}", 2.6),)
-            return (self._make_hypothesis(
-                kind,
-                target,
-                f"أبلغ TypeScript عن {code}: {message}",
-                location,
-                evidence,
-                replacement,
-                uncertainty=0.08,
-            ),), ()
+            return self._diagnose_typescript(ts_match, symbols)
 
         evidence = (Evidence("input", "لم تطابق الرسالة نمط خطأ مدعومًا بعد", 0.4),)
         hypothesis = self._make_hypothesis(
@@ -265,6 +247,71 @@ class BurhanAnalyzer:
     def _closest_symbol(name: str, symbols: tuple[str, ...]) -> str | None:
         matches = difflib.get_close_matches(name, symbols, n=1, cutoff=0.72)
         return matches[0] if matches else None
+
+    def _diagnose_typescript(
+        self,
+        match: re.Match[str],
+        symbols: tuple[str, ...],
+    ) -> tuple[tuple[Hypothesis, ...], tuple[str, ...]]:
+        code = match.group("code")
+        message = match.group("message").strip()
+        location = (
+            f"{self._normalize_path(match.group('file').strip())}:"
+            f"{match.group('line')}:{match.group('column')}"
+        )
+        unknown_name = TS_UNKNOWN_NAME.search(message)
+        missing_property = TS_PROPERTY_MISSING.search(message)
+
+        if unknown_name:
+            target = unknown_name.group("name")
+            replacement = self._closest_symbol(target, symbols)
+            explanation = f"أبلغ TypeScript عن {code}: {message}"
+            if replacement:
+                explanation += f"، وأقرب رمز معروف هو '{replacement}'"
+            hypothesis = self._make_hypothesis(
+                "undefined_name",
+                target,
+                explanation,
+                location,
+                (Evidence("typescript", f"{code}: {message}", 2.6),),
+                replacement,
+                uncertainty=0.08,
+            )
+            return (hypothesis,), ()
+
+        if code == "TS2322":
+            hypothesis = self._make_hypothesis(
+                "type_mismatch",
+                code,
+                f"أبلغ TypeScript عن {code}: {message}",
+                location,
+                (Evidence("typescript", f"{code}: {message}", 2.6),),
+                uncertainty=0.08,
+            )
+            return (hypothesis,), ()
+
+        if missing_property:
+            property_name = missing_property.group("name")
+            type_name = missing_property.group("type")
+            hypothesis = self._make_hypothesis(
+                "missing_property",
+                property_name,
+                f"الخاصية '{property_name}' غير موجودة على النوع '{type_name}' ({code})",
+                location,
+                (Evidence("typescript", f"{code}: {message}", 2.6),),
+                uncertainty=0.1,
+            )
+            return (hypothesis,), ("تحقق من تعريف النوع أو إصدار الحزمة الذي يوفر هذه الخاصية.",)
+
+        hypothesis = self._make_hypothesis(
+            "typescript_diagnostic",
+            code,
+            f"أبلغ TypeScript عن {code}: {message}",
+            location,
+            (Evidence("typescript", f"{code}: {message}", 2.6),),
+            uncertainty=0.08,
+        )
+        return (hypothesis,), ()
 
     @staticmethod
     def _normalize_path(value: str) -> str:

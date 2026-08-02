@@ -477,6 +477,11 @@ def _print_analysis(result: object) -> None:
     print(f"التشخيص: {_terminal_text(primary.explanation)}")
     print(f"الموقع: {_terminal_text(primary.location or 'غير محدد')}")
     print(f"الثقة: {primary.confidence:.0%} | الطاقة: {primary.energy:.3f}")
+    print(
+        "السياق: "
+        f"{result.provenance.analyzed_files} ملف"
+        f"{' (المسح غير مكتمل)' if result.provenance.scan_truncated else ''}"
+    )
     if primary.suggested_replacement:
         print(
             f"التعديل المرشح: {_terminal_text(primary.target)} -> "
