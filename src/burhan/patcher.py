@@ -15,12 +15,19 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .model import Hypothesis
+from .model import AnalysisResult, BirEdge, BirNode, Evidence, Hypothesis, NodeKind
 from .scanner import is_secret_file
 
 
 DEFAULT_DOCKER_IMAGE = (
     "python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
+)
+
+# Pinned pytest image (python:3.12-slim + pytest 8.x).
+# Rebuild with: docker build -f docker/Dockerfile.pytest -t burhan-pytest:local .
+# Then pin: docker inspect --format='{{index .RepoDigests 0}}' burhan-pytest:local
+PYTEST_DOCKER_IMAGE = (
+    "burhan-pytest@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )
 
 
@@ -568,3 +575,58 @@ class ProofRunner:
             for chunk in iter(lambda: stream.read(65_536), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Test-result evidence injection
+# ---------------------------------------------------------------------------
+
+def inject_test_evidence(analysis: AnalysisResult, proof: ProofResult) -> AnalysisResult:
+    """Return a new :class:`AnalysisResult` with test-run outcomes added as BIR evidence.
+
+    Two new evidence items are appended to the primary hypothesis:
+
+    * ``test_run_before`` — the baseline run that *failed* before the patch.
+    * ``test_run_after``  — the run that *passed* after the patch.
+
+    Two ``BirNode`` entries of kind ``EVIDENCE`` are also added to the BIR
+    state so that the graph explicitly records the test outcomes.
+    """
+    from dataclasses import replace as _replace
+
+    before = proof.before
+    after = proof.after
+
+    before_summary = (
+        f"اختبار قبل الرقعة: فشل (exit={before.exit_code}, "
+        f"{round(before.duration_ms, 1)} ms)"
+    )
+    after_summary = (
+        f"اختبار بعد الرقعة: نجح (exit={after.exit_code}, "
+        f"{round(after.duration_ms, 1)} ms)"
+    )
+
+    new_evidence = (
+        Evidence(source="test_run_before", summary=before_summary, weight=1.5),
+        Evidence(source="test_run_after", summary=after_summary, weight=2.0),
+    )
+
+    primary = analysis.primary
+    updated_primary = _replace(primary, evidence=primary.evidence + new_evidence)
+    updated_hypotheses = (updated_primary,) + analysis.hypotheses[1:]
+
+    state = analysis.state
+    for idx, ev in enumerate(new_evidence):
+        node_id = f"evidence:test_run:{idx}"
+        state = state.with_node(
+            BirNode(
+                node_id,
+                NodeKind.EVIDENCE,
+                ev.summary,
+                (("source", ev.source), ("weight", str(ev.weight))),
+            )
+        )
+        state = state.with_edge(BirEdge(f"hypothesis:0", "supported_by", node_id, ev.weight))
+
+    return _replace(analysis, hypotheses=updated_hypotheses, state=state)
+

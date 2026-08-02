@@ -1,0 +1,25 @@
+# بُرهان – صورة Docker لتشغيل pytest داخل بيئة الإثبات
+#
+# تُستخدم هذه الصورة مع أمر `repair-proof --backend docker` لتشغيل مجموعات
+# اختبارات pytest بأمان كامل (شبكة معطّلة، نظام ملفات للقراءة فقط، صلاحيات
+# مخفّضة).
+#
+# --- بناء الصورة وتثبيتها بالـ sha256 ---
+#
+#   docker build -f docker/Dockerfile.pytest -t burhan-pytest:local .
+#   docker inspect --format='{{index .RepoDigests 0}}' burhan-pytest:local
+#
+# ثم ضع القيمة المُعادة في PYTEST_DOCKER_IMAGE داخل src/burhan/patcher.py.
+# لا تستخدم الصورة بدون تثبيت sha256؛ أمر `repair-proof` يرفض أي صورة
+# غير مثبّتة.
+
+FROM python:3.12-slim
+
+# تثبيت pytest بإصدار محدد لضمان التكرارية.
+# غيّر الإصدار وأعد البناء عند الترقية.
+RUN pip install --no-cache-dir "pytest==8.3.4"
+
+# المجلد الافتراضي للعمل؛ يُربط مشروع المستخدم هنا كـ read-only mount.
+WORKDIR /workspace
+
+# لا تغيّر ENTRYPOINT — يمرر بُرهان الأمر الكامل عبر docker run.
