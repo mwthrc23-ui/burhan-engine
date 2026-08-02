@@ -391,7 +391,7 @@ def _load_proof_result(payload: Mapping[str, Any]) -> ProofResult:
         before=_load_command_run(proof_data.get("before"), "before"),
         after=_load_command_run(proof_data.get("after"), "after"),
         patch=PatchResult(
-            diff=_required_text(patch_value, "diff"),
+            diff=_required_text(patch_value, "diff", allow_empty=True),
             changed_files=_required_text_tuple(patch_value.get("changed_files"), "patch.changed_files"),
             applied=_required_bool(patch_value.get("applied"), "patch.applied"),
             artifact_hash=_required_text(patch_value, "artifact_hash"),
@@ -416,8 +416,8 @@ def _load_command_run(value: object, field_name: str) -> CommandRun:
         exit_code=exit_code,
         timed_out=_required_bool(data.get("timed_out"), f"{field_name}.timed_out"),
         duration_ms=float(duration_ms),
-        stdout=_required_text(data, "stdout"),
-        stderr=_required_text(data, "stderr"),
+        stdout=_required_text(data, "stdout", allow_empty=True),
+        stderr=_required_text(data, "stderr", allow_empty=True),
         output_truncated=_required_bool(data.get("output_truncated"), f"{field_name}.output_truncated"),
     )
 
@@ -625,10 +625,11 @@ def _required_mapping(value: object, field_name: str) -> Mapping[str, Any]:
     return value
 
 
-def _required_text(mapping: Mapping[str, Any], field_name: str) -> str:
+def _required_text(mapping: Mapping[str, Any], field_name: str, *, allow_empty: bool = False) -> str:
     value = mapping.get(field_name)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field_name} must be a non-empty string")
+    if not isinstance(value, str) or (not allow_empty and not value):
+        message = "a string" if allow_empty else "a non-empty string"
+        raise ValueError(f"{field_name} must be {message}")
     return value
 
 
