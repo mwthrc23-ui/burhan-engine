@@ -12,6 +12,22 @@ from burhan.cli import main
 
 
 class CliTests(unittest.TestCase):
+    def test_main_without_command_prints_help_hint(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = main([])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("burhan analyze --help", stderr.getvalue())
+
+    def test_version_flag_prints_engine_version(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = main(["--version"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("burhan 0.5.0", output.getvalue())
+
     def test_analyze_command_outputs_machine_readable_bir_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

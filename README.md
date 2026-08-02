@@ -4,6 +4,56 @@
 
 هذه النسخة `0.5.0` هي إثبات فكرة قابل للتجربة: التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API. أضيف إثبات إصلاح سلوكي داخل Docker مع بقاء المشروع الأصلي دون تغيير.
 
+## البدء السريع (أسهل طريق)
+
+### 1) تثبيت الأداة محليًا (PyPI/Editable)
+
+```bash
+python -m pip install burhan-engine
+burhan --help
+```
+
+وللتطوير المحلي من المستودع:
+
+```bash
+python -m pip install -e .
+burhan --version
+```
+
+### 2) تشغيل موحد بالأمر `burhan`
+
+تحليل فقط:
+
+```bash
+burhan analyze --project PATH_TO_PROJECT --goal "شخّص الخطأ" --error-file PATH_TO_ERROR.txt
+```
+
+معاينة إصلاح:
+
+```bash
+burhan repair --project PATH_TO_PROJECT --goal "أصلح الخطأ بأقل تعديل" --error-file PATH_TO_ERROR.txt
+```
+
+إثبات الإصلاح:
+
+```bash
+burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" --error-file PATH_TO_ERROR.txt --trust-local-tests
+```
+
+### 3) تشغيل عبر Docker بدون إعداد Python محلي
+
+ابنِ الصورة:
+
+```bash
+docker build -t burhan-engine:local .
+```
+
+ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
+
+```bash
+docker run --rm -v "$PWD:/workspace" -w /workspace burhan-engine:local analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+```
+
 ## تجربة كاملة بنقرة واحدة
 
 يشغّل الأمر التالي التجربة على نسخة مؤقتة: تحليل الخطأ، معاينة patch، تطبيقه، ثم تشغيل الكود المصحح. لا يغيّر ملف المثال الأصلي.
