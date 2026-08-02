@@ -63,12 +63,6 @@ cd C:\Users\tkssy\OneDrive\ドキュメント\Burhan
 powershell -ExecutionPolicy Bypass -File scripts\try-burhan.ps1
 ```
 
-ولتجربة ذاكرة الإصلاح:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\try-repair-memory.ps1
-```
-
 ## ما يعمل الآن
 
 - فهرسة آمنة ومحدودة لملفات Python وTypeScript/JavaScript وبعض ملفات الإعداد والتوثيق.
@@ -85,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File scripts\try-repair-memory.ps1
 - يمنح `V2` عند تحقق fail-to-pass داخل Docker بشبكة معطلة وحدود موارد وملفات للقراءة فقط.
 - المعاينة هي الوضع الافتراضي؛ الكتابة تحتاج الخيار الصريح `--apply`.
 - التوقف وطلب دليل إضافي بدل اختراع سبب غير مدعوم.
-- تخزين حالات `RepairEpisode` في SQLite مع السبب ونمط الإصلاح والاختبار والمصدر.
+- قراءة حالات `RepairEpisode` الموثقة مسبقًا من SQLite؛ إدخال ملفات JSON عبر CLI معطل مؤقتًا حتى يمكن إعادة إثباتها وربطها بالحالة والرقعة.
 - البحث عن حالات `AttributeError` مشابهة حسب الخاصية واللغة والإطار والاعتماديات.
 - ربط نتائج ذاكرة الإصلاح بالتشخيص الجديد عبر `analyze --memory`.
 - جمع حالات حقيقية محدودة من SWE-bench Verified مع الوصف والرقعة ورقعة الاختبار و`FAIL_TO_PASS`.
@@ -103,19 +97,17 @@ powershell -ExecutionPolicy Bypass -File scripts\try-repair-memory.ps1
 Python + pytest + AttributeError
 ```
 
-أضف حالة موثقة:
-
-```powershell
-python -m burhan memory-add `
-  --database repair-memory.sqlite3 `
-  --episode examples\repair-memory\episode-send-api.json
-```
+أمرا `memory-add` و`memory-promote` معطلان مؤقتًا. لا يقبل CLI ملفات
+`RepairEpisode` أو `ProofResult` المقدمة من المستخدم بوصفها دليلًا موثوقًا حتى
+يستطيع `ProofRunner` إعادة تنفيذ اختبار `AttributeError` وربط النتيجة بالحالة
+والرقعة نفسها. يبقى البحث في قاعدة موثقة مسبقًا متاحًا. يجب أن يشير
+`--database` إلى قاعدة موجودة ومعبأة من مسار موثوق؛ لا ينشئ المثال بيانات:
 
 ابحث عن حالة مشابهة:
 
 ```powershell
 python -m burhan memory-search `
-  --database repair-memory.sqlite3 `
+  --database C:\path\to\preverified-memory.sqlite3 `
   --error-file examples\repair-memory\error.txt `
   --language python `
   --framework pytest `
@@ -129,11 +121,12 @@ python -m burhan analyze `
   --project examples\repair-memory\project `
   --goal "شخّص الخطأ باستخدام ذاكرة الإصلاح" `
   --error-file examples\repair-memory\error.txt `
-  --memory repair-memory.sqlite3 `
+  --memory C:\path\to\preverified-memory.sqlite3 `
   --dependency demo-client
 ```
 
-الحالة المرفقة اصطناعية وموسومة `source_type=synthetic`، وليست منسوبة إلى GitHub.
+ملفات المثال المرفقة اصطناعية وموسومة `source_type=synthetic`، وليست منسوبة
+إلى GitHub ولا تُحمّل تلقائيًا في الذاكرة الموثوقة.
 
 ## جمع الأخطاء الحقيقية
 
@@ -299,7 +292,7 @@ python -m unittest discover -s tests -v
 
 ## المرحلة التالية
 
-1. إضافة بوابة ترقية تتطلب سببًا من المصدر أو مراجعة بشرية موثقة مع إثبات `V2`.
+1. استعادة بوابة الترقية بإعادة إثبات `AttributeError` وربط `ProofResult` بالحالة والرقعة، مع سبب من المصدر أو مراجعة بشرية موثقة وإثبات `V2`.
 2. إعادة نتيجة الاختبار إلى BIR كدليل جديد قابل للاسترجاع.
 3. بناء صورة تحقق pytest مثبتة بالاعتماديات وdigest.
 4. إضافة فهرسة متزايدة بـTree-sitter وLSP.
