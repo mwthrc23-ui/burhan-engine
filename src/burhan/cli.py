@@ -8,7 +8,7 @@ from typing import Sequence
 
 from .analyzer import ENGINE_VERSION, BurhanAnalyzer
 from .memory import MemoryQuery, RepairEpisode, RepairMemory
-from .patcher import DEFAULT_DOCKER_IMAGE, PatchEngine, PatchResult, ProofResult, ProofRunner
+from .patcher import DEFAULT_DOCKER_IMAGE, PatchEngine, PatchResult, ProofResult, ProofRunner, inject_test_evidence
 from .sources import (
     BugsInPySource,
     GitHubPullRequestSource,
@@ -68,6 +68,28 @@ def build_parser() -> argparse.ArgumentParser:
     memory_add.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
     memory_add.add_argument("--episode", type=Path, required=True, help="ملف RepairEpisode بصيغة JSON")
     memory_add.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    memory_promote = subcommands.add_parser(
+        "memory-promote",
+        help=(
+            "بوابة ترقية: أضف حالة إصلاح إلى الذاكرة فقط إذا كان إثباتها V2 "
+            "وتضمّنت مراجعة بشرية موثّقة"
+        ),
+    )
+    memory_promote.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
+    memory_promote.add_argument("--episode", type=Path, required=True, help="ملف RepairEpisode بصيغة JSON")
+    memory_promote.add_argument(
+        "--proof",
+        type=Path,
+        required=True,
+        help="ملف ProofResult بصيغة JSON (مخرج repair-proof --json)",
+    )
+    memory_promote.add_argument(
+        "--human-review-note",
+        required=True,
+        metavar="NOTE",
+        help="ملاحظة المراجع البشري التي تؤكد صحة الإصلاح (نص غير فارغ)",
+    )
+    memory_promote.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
     memory_search = subcommands.add_parser("memory-search", help="ابحث عن حالة إصلاح مشابهة")
     memory_search.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
     search_error = memory_search.add_mutually_exclusive_group(required=True)
@@ -147,6 +169,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(code) if isinstance(code, int) else 1
     if args.command == "memory-add":
         return _memory_add(args)
+    if args.command == "memory-promote":
+        return _memory_promote(args)
     if args.command == "memory-search":
         return _memory_search(args)
     if args.command == "source-import-swebench":
@@ -218,6 +242,63 @@ def _memory_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _memory_promote(args: argparse.Namespace) -> int:
+    """بوابة الترقية: تقبل الحالة فقط إذا كان الإثبات V2 وتوجد مراجعة بشرية."""
+    review_note = (args.human_review_note or "").strip()
+    if not review_note:
+        print("خطأ: --human-review-note يجب أن يحتوي على نص غير فارغ", file=sys.stderr)
+        return 2
+    try:
+        episode_payload = json.loads(_read_limited_text(args.episode, limit=1_000_000))
+        if not isinstance(episode_payload, dict):
+            raise ValueError("episode JSON must contain an object")
+        episode = RepairEpisode.from_dict(episode_payload)
+
+        proof_payload = json.loads(_read_limited_text(args.proof, limit=1_000_000))
+        if not isinstance(proof_payload, dict):
+            raise ValueError("proof JSON must contain an object")
+
+        # الإثبات قد يكون مغلّفاً داخل {"analysis": ..., "proof": ...}
+        proof_data = proof_payload.get("proof", proof_payload)
+
+        verified = proof_data.get("verified")
+        grade = (proof_data.get("verification") or {}).get("grade", "")
+
+        if not verified:
+            raise ValueError(
+                f"الإثبات غير مكتمل (verified=false) — "
+                "يتطلب memory-promote إثباتًا ناجحًا"
+            )
+        if grade != "V2":
+            raise ValueError(
+                f"درجة الإثبات هي '{grade}' لكن بوابة الترقية تتطلب V2. "
+                "شغّل repair-proof --backend docker للحصول على V2."
+            )
+
+        memory = RepairMemory(args.database)
+        memory.add(episode)
+        result = {
+            "promoted": episode.id,
+            "grade": grade,
+            "human_review_note": review_note,
+            "episodes": memory.count(),
+        }
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        print(f"خطأ في بوابة الترقية: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"✓ رُقّيت الحالة: {_terminal_text(episode.id)} | "
+            f"الدرجة: {grade} | "
+            f"إجمالي الحالات: {result['episodes']}"
+        )
+        print(f"  ملاحظة المراجع: {_terminal_text(review_note)}")
+    return 0
+
+
 def _repair_proof(args: argparse.Namespace) -> int:
     if not args.trust_local_tests:
         print(
@@ -238,6 +319,8 @@ def _repair_proof(args: argparse.Namespace) -> int:
             backend=args.backend,
             docker_image=args.docker_image,
         )
+        # أعد نتيجة الاختبار إلى BIR كأدلة
+        analysis = inject_test_evidence(analysis, proof)
     except (OSError, RuntimeError, UnicodeError, ValueError) as error:
         print(f"لم يثبت الإصلاح: {error}", file=sys.stderr)
         return 1
