@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .analyzer import BurhanAnalyzer
+from .analyzer import ENGINE_VERSION, BurhanAnalyzer
 from .memory import MemoryQuery, RepairEpisode, RepairMemory
 from .patcher import DEFAULT_DOCKER_IMAGE, PatchEngine, PatchResult, ProofResult, ProofRunner
 from .sources import (
@@ -17,11 +17,27 @@ from .sources import (
 )
 
 
+class BurhanArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "the following arguments are required: command" in message:
+            message += "\nhint: ابدأ بأحد الأوامر مثل burhan analyze --help"
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = BurhanArgumentParser(
         prog="burhan",
         description="بُرهان: تشخيص برمجي قائم على السياق والأدلة",
+        epilog=(
+            "أمثلة سريعة:\n"
+            "  burhan analyze --project . --goal \"شخّص الخطأ\" --error-file error.txt\n"
+            "  burhan repair --project . --goal \"أصلح الخطأ\" --error-file error.txt\n"
+            "  burhan repair-proof --project . --goal \"أثبت الإصلاح\" "
+            "--error-file error.txt --trust-local-tests"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {ENGINE_VERSION}")
     subcommands = parser.add_subparsers(dest="command", required=True)
     analyze = subcommands.add_parser("analyze", help="حلل مشروعًا ورسالة خطأ")
     _add_case_arguments(analyze)
@@ -124,7 +140,11 @@ def _add_case_arguments(command: argparse.ArgumentParser) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exit_signal:
+        code = exit_signal.code
+        return int(code) if isinstance(code, int) else 1
     if args.command == "memory-add":
         return _memory_add(args)
     if args.command == "memory-search":
@@ -477,6 +497,11 @@ def _print_analysis(result: object) -> None:
     print(f"التشخيص: {_terminal_text(primary.explanation)}")
     print(f"الموقع: {_terminal_text(primary.location or 'غير محدد')}")
     print(f"الثقة: {primary.confidence:.0%} | الطاقة: {primary.energy:.3f}")
+    print(
+        "السياق: "
+        f"{result.provenance.analyzed_files} ملف"
+        f"{' (المسح غير مكتمل)' if result.provenance.scan_truncated else ''}"
+    )
     if primary.suggested_replacement:
         print(
             f"التعديل المرشح: {_terminal_text(primary.target)} -> "
