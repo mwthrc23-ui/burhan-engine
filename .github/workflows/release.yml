@@ -52,7 +52,7 @@ jobs:
     environment: pypi
     steps:
       - name: Download distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.3
         with:
           name: python-dist
           path: dist
