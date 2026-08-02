@@ -266,31 +266,57 @@ class MemoryPromoteTests(unittest.TestCase):
         },
     }
 
-    _PROOF_V2: dict = {
-        "verified": True,
-        "verification": {"grade": "V2", "checks": [], "limitations": []},
-    }
-
-    _PROOF_V1: dict = {
-        "verified": True,
-        "verification": {"grade": "V1", "checks": [], "limitations": []},
-    }
-
-    _PROOF_UNVERIFIED: dict = {
-        "verified": False,
-        "verification": {"grade": "V2", "checks": [], "limitations": []},
-    }
-
     def _run(self, argv: list[str]) -> int:
         from burhan.cli import main
         return main(argv)
+
+    def _proof_payload(self) -> dict:
+        return {
+            "verified": True,
+            "command": ["pytest", "-q", "test_foo.py"],
+            "before": {
+                "exit_code": 1,
+                "timed_out": False,
+                "duration_ms": 12.0,
+                "stdout": "",
+                "stderr": "AssertionError",
+                "output_truncated": False,
+            },
+            "after": {
+                "exit_code": 0,
+                "timed_out": False,
+                "duration_ms": 8.0,
+                "stdout": ".\n1 passed\n",
+                "stderr": "",
+                "output_truncated": False,
+            },
+            "patch": {
+                "diff": "diff --git a/app.py b/app.py\n",
+                "changed_files": ["app.py"],
+                "applied": True,
+                "artifact_hash": "sha256:abc",
+                "verification": {"grade": "V0", "checks": ["python_ast_parse"], "limitations": []},
+            },
+            "original_unchanged": True,
+            "verification": {
+                "grade": "V2",
+                "checks": [
+                    "test_failed_before_patch",
+                    "test_passed_after_patch",
+                    "original_unchanged",
+                ],
+                "limitations": [],
+            },
+            "backend": "docker",
+            "runtime": "burhan-pytest@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        }
 
     def test_promote_succeeds_with_v2_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
-            proof.write_text(json.dumps(self._PROOF_V2), encoding="utf-8")
+            proof.write_text(json.dumps(self._proof_payload()), encoding="utf-8")
             db = Path(tmp) / "mem.db"
             code = self._run([
                 "memory-promote",
@@ -306,7 +332,9 @@ class MemoryPromoteTests(unittest.TestCase):
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
-            proof.write_text(json.dumps(self._PROOF_V1), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["verification"]["grade"] = "V1"
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
             db = Path(tmp) / "mem.db"
             code = self._run([
                 "memory-promote",
@@ -322,7 +350,9 @@ class MemoryPromoteTests(unittest.TestCase):
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
-            proof.write_text(json.dumps(self._PROOF_UNVERIFIED), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["verified"] = False
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
             db = Path(tmp) / "mem.db"
             code = self._run([
                 "memory-promote",
@@ -339,7 +369,7 @@ class MemoryPromoteTests(unittest.TestCase):
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
-            proof.write_text(json.dumps(self._PROOF_V2), encoding="utf-8")
+            proof.write_text(json.dumps(self._proof_payload()), encoding="utf-8")
             db = Path(tmp) / "mem.db"
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -363,7 +393,7 @@ class MemoryPromoteTests(unittest.TestCase):
             ep = Path(tmp) / "ep.json"
             ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
             proof = Path(tmp) / "proof.json"
-            wrapped = {"analysis": {}, "proof": self._PROOF_V2}
+            wrapped = {"analysis": {}, "proof": self._proof_payload()}
             proof.write_text(json.dumps(wrapped), encoding="utf-8")
             db = Path(tmp) / "mem.db"
             code = self._run([
@@ -374,6 +404,61 @@ class MemoryPromoteTests(unittest.TestCase):
                 "--human-review-note", "مراجع: سارة",
             ])
             self.assertEqual(code, 0)
+
+    def test_promote_rejects_local_backend_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ep = Path(tmp) / "ep.json"
+            ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["backend"] = "local"
+            proof_payload["runtime"] = "3.12.0"
+            proof = Path(tmp) / "proof.json"
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
+            db = Path(tmp) / "mem.db"
+            code = self._run([
+                "memory-promote",
+                "--database", str(db),
+                "--episode", str(ep),
+                "--proof", str(proof),
+                "--human-review-note", "مراجع: سارة",
+            ])
+            self.assertEqual(code, 2)
+
+    def test_promote_rejects_proof_without_fail_to_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ep = Path(tmp) / "ep.json"
+            ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["before"]["exit_code"] = 0
+            proof = Path(tmp) / "proof.json"
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
+            db = Path(tmp) / "mem.db"
+            code = self._run([
+                "memory-promote",
+                "--database", str(db),
+                "--episode", str(ep),
+                "--proof", str(proof),
+                "--human-review-note", "مراجع: سارة",
+            ])
+            self.assertEqual(code, 2)
+
+    def test_promote_rejects_when_original_was_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ep = Path(tmp) / "ep.json"
+            ep.write_text(json.dumps(self._EPISODE), encoding="utf-8")
+            proof_payload = self._proof_payload()
+            proof_payload["original_unchanged"] = False
+            proof = Path(tmp) / "proof.json"
+            proof.write_text(json.dumps(proof_payload), encoding="utf-8")
+            db = Path(tmp) / "mem.db"
+            code = self._run([
+                "memory-promote",
+                "--database", str(db),
+                "--episode", str(ep),
+                "--proof", str(proof),
+                "--human-review-note", "مراجع: سارة",
+            ])
+            self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

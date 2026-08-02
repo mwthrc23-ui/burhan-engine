@@ -183,6 +183,61 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("original changed", stderr.getvalue())
 
+    def test_repair_proof_uses_pytest_image_for_docker_pytest_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.py").write_text("def message():\n    return 'ok'\n\nprint(mesage())\n", encoding="utf-8")
+            proof_image = "burhan-pytest@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+            with patch("burhan.cli.PYTEST_DOCKER_IMAGE", proof_image):
+                with patch("burhan.cli.ProofRunner.prove", side_effect=RuntimeError("stop")) as prove:
+                    exit_code = main(
+                        [
+                            "repair-proof",
+                            "--project",
+                            str(root),
+                            "--goal",
+                            "prove repair",
+                            "--error",
+                            'File "main.py", line 4\nNameError: name \'mesage\' is not defined',
+                            "--trust-local-tests",
+                            "--backend",
+                            "docker",
+                            "--test-program",
+                            "pytest",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(prove.call_args.kwargs["docker_image"], proof_image)
+
+    def test_repair_proof_rejects_placeholder_pytest_docker_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.py").write_text("def message():\n    return 'ok'\n\nprint(mesage())\n", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "repair-proof",
+                        "--project",
+                        str(root),
+                        "--goal",
+                        "prove repair",
+                        "--error",
+                        'File "main.py", line 4\nNameError: name \'mesage\' is not defined',
+                        "--trust-local-tests",
+                        "--backend",
+                        "docker",
+                        "--test-program",
+                        "pytest",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("صورة pytest مثبتة", stderr.getvalue())
+
     def test_memory_add_and_search_commands_return_verified_match(self) -> None:
         from tests.test_memory import episode_payload
 
