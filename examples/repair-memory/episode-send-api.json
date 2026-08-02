@@ -1,0 +1,46 @@
+{
+  "id": "synthetic-python-client-send-rename-v1",
+  "title": "Client API renamed send to send_message",
+  "domain": "python-pytest-attribute-error",
+  "signature": {
+    "error_kind": "attribute_error",
+    "exception_type": "AttributeError",
+    "normalized_message": "object has no attribute",
+    "attribute_name": "send"
+  },
+  "environment": {
+    "language": "python",
+    "test_framework": "pytest",
+    "runtime_version": "3.12",
+    "dependencies": [
+      "demo-client"
+    ]
+  },
+  "root_cause": "The client library renamed the send method to send_message in the target API version.",
+  "patch_pattern": {
+    "kind": "rename_attribute",
+    "from": "send",
+    "to": "send_message"
+  },
+  "verification": {
+    "grade": "V2",
+    "reproduction_test": "test_send_api_compatibility",
+    "evidence": [
+      "synthetic_fixture_failed_before",
+      "synthetic_fixture_passed_after"
+    ]
+  },
+  "provenance": {
+    "source_type": "synthetic",
+    "repository_url": null,
+    "issue_url": null,
+    "pull_request_url": null,
+    "commit_sha": null,
+    "license_spdx": "MIT"
+  },
+  "tags": [
+    "api-change",
+    "attribute",
+    "synthetic-demo"
+  ]
+}

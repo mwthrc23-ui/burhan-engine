@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "client.py", line 2, in deliver
+    return api.send(payload)
+AttributeError: 'ApiClient' object has no attribute 'send'

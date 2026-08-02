@@ -1,0 +1,472 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Sequence
+
+from .analyzer import BurhanAnalyzer
+from .memory import MemoryQuery, RepairEpisode, RepairMemory
+from .patcher import PatchEngine, PatchResult
+from .sources import (
+    BugsInPySource,
+    GitHubPullRequestSource,
+    SourceStore,
+    SweBenchVerifiedSource,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="burhan",
+        description="بُرهان: تشخيص برمجي قائم على السياق والأدلة",
+    )
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    analyze = subcommands.add_parser("analyze", help="حلل مشروعًا ورسالة خطأ")
+    _add_case_arguments(analyze)
+    analyze.add_argument("--memory", type=Path, help="قاعدة ذاكرة إصلاحات SQLite")
+    analyze.add_argument("--dependency", action="append", default=[], help="اعتماد موجود في سياق الخطأ")
+    analyze.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    repair = subcommands.add_parser("repair", help="شخّص وأنشئ patch آمنًا لمعاينته")
+    _add_case_arguments(repair)
+    repair.add_argument("--apply", action="store_true", help="طبّق patch بعد اجتياز تحقق V0")
+    repair.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    memory_add = subcommands.add_parser("memory-add", help="أضف حالة إصلاح موثقة إلى الذاكرة")
+    memory_add.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
+    memory_add.add_argument("--episode", type=Path, required=True, help="ملف RepairEpisode بصيغة JSON")
+    memory_add.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    memory_search = subcommands.add_parser("memory-search", help="ابحث عن حالة إصلاح مشابهة")
+    memory_search.add_argument("--database", type=Path, required=True, help="مسار قاعدة ذاكرة SQLite")
+    search_error = memory_search.add_mutually_exclusive_group(required=True)
+    search_error.add_argument("--error", help="نص الخطأ مباشرة")
+    search_error.add_argument("--error-file", type=Path, help="ملف UTF-8 يحتوي رسالة الخطأ")
+    memory_search.add_argument("--language", default="python")
+    memory_search.add_argument("--framework", default="pytest")
+    memory_search.add_argument("--dependency", action="append", default=[])
+    memory_search.add_argument("--limit", type=int, default=5)
+    memory_search.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    swebench = subcommands.add_parser(
+        "source-import-swebench",
+        help="اجمع حالات AttributeError من SWE-bench Verified",
+    )
+    swebench.add_argument("--database", type=Path, required=True)
+    swebench.add_argument("--offset", type=int, default=0)
+    swebench.add_argument("--length", type=int, default=100)
+    swebench.add_argument(
+        "--input",
+        type=Path,
+        help="ملف استجابة محفوظ للاختبار دون شبكة",
+    )
+    swebench.add_argument("--json", action="store_true")
+    bugsinpy = subcommands.add_parser(
+        "source-import-bugsinpy",
+        help="اجمع حالة خام محددة من BugsInPy",
+    )
+    bugsinpy.add_argument("--database", type=Path, required=True)
+    bugsinpy.add_argument("--project", required=True)
+    bugsinpy.add_argument("--bug", required=True)
+    bugsinpy.add_argument(
+        "--bundle",
+        type=Path,
+        help="مجلد محلي يحوي bug.info وbug_patch.txt وrun_test.sh",
+    )
+    bugsinpy.add_argument("--json", action="store_true")
+    github_pr = subcommands.add_parser(
+        "source-import-github-pr",
+        help="اجمع PR محدد من GitHub كسجل خام غير مرقى",
+    )
+    github_pr.add_argument("--database", type=Path, required=True)
+    github_pr.add_argument("--repo", required=True, help="مثال: owner/repository")
+    github_pr.add_argument("--pr", required=True, help="رقم Pull Request")
+    github_pr.add_argument(
+        "--input",
+        type=Path,
+        help="ملف JSON محفوظ يحوي issue وpull_request وfiles للاختبار دون شبكة",
+    )
+    github_pr.add_argument("--json", action="store_true")
+    source_search = subcommands.add_parser(
+        "source-search",
+        help="استرجع رقعًا واختبارات مشابهة من السجلات الخام",
+    )
+    source_search.add_argument("--database", type=Path, required=True)
+    source_error = source_search.add_mutually_exclusive_group(required=True)
+    source_error.add_argument("--error")
+    source_error.add_argument("--error-file", type=Path)
+    source_search.add_argument("--limit", type=int, default=5)
+    source_search.add_argument("--json", action="store_true")
+    return parser
+
+
+def _add_case_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--project", type=Path, required=True, help="مسار المشروع")
+    command.add_argument("--goal", required=True, help="هدف المستخدم والقيود المهمة")
+    error_group = command.add_mutually_exclusive_group(required=True)
+    error_group.add_argument("--error", help="نص الخطأ مباشرة")
+    error_group.add_argument("--error-file", type=Path, help="ملف UTF-8 يحتوي رسالة الخطأ")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "memory-add":
+        return _memory_add(args)
+    if args.command == "memory-search":
+        return _memory_search(args)
+    if args.command == "source-import-swebench":
+        return _source_import_swebench(args)
+    if args.command == "source-import-bugsinpy":
+        return _source_import_bugsinpy(args)
+    if args.command == "source-import-github-pr":
+        return _source_import_github_pr(args)
+    if args.command == "source-search":
+        return _source_search(args)
+    try:
+        error_text = _read_error(args.error, args.error_file)
+        result = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
+        patch = PatchEngine().repair(args.project, result.primary, apply=args.apply) if args.command == "repair" else None
+        memory_matches = ()
+        if args.command == "analyze" and args.memory:
+            memory_matches = RepairMemory(args.memory).search(
+                MemoryQuery(
+                    error_text=error_text,
+                    language="python",
+                    test_framework="pytest",
+                    dependencies=tuple(args.dependency),
+                )
+            )
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        payload = result.to_dict()
+        if patch is not None:
+            payload = {"analysis": payload, "patch": patch.to_dict()}
+        elif memory_matches:
+            payload = {
+                "analysis": payload,
+                "memory_matches": [match.to_dict() for match in memory_matches],
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        _print_analysis(result)
+        if memory_matches:
+            _print_memory_matches(memory_matches)
+        if patch is not None:
+            _print_patch(patch)
+    return 0
+
+
+def _memory_add(args: argparse.Namespace) -> int:
+    try:
+        payload = json.loads(_read_limited_text(args.episode, limit=1_000_000))
+        if not isinstance(payload, dict):
+            raise ValueError("episode JSON must contain an object")
+        episode = RepairEpisode.from_dict(payload)
+        memory = RepairMemory(args.database)
+        memory.add(episode)
+        result = {"stored": episode.id, "episodes": memory.count()}
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"أضيفت الحالة: {_terminal_text(episode.id)} | "
+            f"إجمالي الحالات: {result['episodes']}"
+        )
+    return 0
+
+
+def _memory_search(args: argparse.Namespace) -> int:
+    try:
+        error_text = _read_error(args.error, args.error_file)
+        matches = RepairMemory(args.database).search(
+            MemoryQuery(
+                error_text=error_text,
+                language=args.language,
+                test_framework=args.framework,
+                dependencies=tuple(args.dependency),
+            ),
+            limit=args.limit,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps({"matches": [item.to_dict() for item in matches]}, ensure_ascii=False, indent=2))
+    elif not matches:
+        print("لا توجد حالة موثقة مشابهة ضمن نطاق الذاكرة الحالي.")
+    else:
+        for index, match in enumerate(matches, start=1):
+            print(
+                f"{index}. {_terminal_text(match.episode.title)} | "
+                f"التشابه: {match.score:.0%}"
+            )
+            print(f"   السبب: {_terminal_text(match.episode.root_cause)}")
+            print(
+                f"   النمط: {_terminal_text(match.episode.patch_pattern.from_value)} -> "
+                f"{_terminal_text(match.episode.patch_pattern.to_value)}"
+            )
+            print(f"   التحقق: {match.episode.verification.grade}")
+    return 0
+
+
+def _source_import_swebench(args: argparse.Namespace) -> int:
+    try:
+        source = SweBenchVerifiedSource()
+        rows = (
+            _read_swebench_rows(args.input)
+            if args.input is not None
+            else source.fetch(offset=args.offset, length=args.length)
+        )
+        store = SourceStore(args.database)
+        stored = 0
+        candidates = 0
+        relevant = 0
+        for row in rows:
+            record = source.to_record(row)
+            if record.error_text is None:
+                continue
+            relevant += 1
+            if record.classification_status == "attribute_error_candidate":
+                candidates += 1
+            if store.add(record):
+                stored += 1
+        result = {
+            "source": "SWE-bench_Verified",
+            "fetched": len(rows),
+            "attribute_error_records": relevant,
+            "attribute_error_candidates": candidates,
+            "stored_raw": stored,
+            "source_records": store.count(),
+            "source_versions": store.version_count(),
+            "promoted": 0,
+        }
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    _print_json_or_summary(args.json, result)
+    return 0
+
+
+def _source_import_bugsinpy(args: argparse.Namespace) -> int:
+    try:
+        source = BugsInPySource()
+        if args.bundle is None:
+            record = source.fetch(project=args.project, bug_id=args.bug)
+        else:
+            files = {
+                name: _read_limited_text(args.bundle / name, limit=5_000_000)
+                for name in ("bug.info", "bug_patch.txt", "run_test.sh")
+            }
+            record = source.to_record(
+                project=args.project,
+                bug_id=args.bug,
+                files=files,
+            )
+        store = SourceStore(args.database)
+        stored = int(store.add(record))
+        result = {
+            "source": "BugsInPy",
+            "source_id": record.source_id,
+            "classification_status": record.classification_status,
+            "stored_raw": stored,
+            "source_records": store.count(),
+            "source_versions": store.version_count(),
+            "promoted": 0,
+        }
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    _print_json_or_summary(args.json, result)
+    return 0
+
+
+def _source_import_github_pr(args: argparse.Namespace) -> int:
+    try:
+        source = GitHubPullRequestSource()
+        if args.input is None:
+            record = source.fetch(repository=args.repo, pull_number=args.pr)
+        else:
+            payload = json.loads(_read_limited_text(args.input, limit=20_000_000))
+            if not isinstance(payload, dict):
+                raise ValueError("GitHub PR input must be an object")
+            issue = payload.get("issue")
+            pull_request = payload.get("pull_request")
+            files = payload.get("files")
+            if (
+                not isinstance(issue, dict)
+                or not isinstance(pull_request, dict)
+                or not isinstance(files, list)
+                or not all(isinstance(item, dict) for item in files)
+            ):
+                raise ValueError("GitHub PR input has an unexpected schema")
+            record = source.to_record(
+                repository=args.repo,
+                pull_number=args.pr,
+                issue=issue,
+                pull_request=pull_request,
+                files=files,
+            )
+        store = SourceStore(args.database)
+        stored = int(store.add(record))
+        result = {
+            "source": "GitHub PR",
+            "source_id": record.source_id,
+            "classification_status": record.classification_status,
+            "stored_raw": stored,
+            "source_records": store.count(),
+            "source_versions": store.version_count(),
+            "promoted": 0,
+        }
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    _print_json_or_summary(args.json, result)
+    return 0
+
+
+def _source_search(args: argparse.Namespace) -> int:
+    try:
+        error_text = _read_error(args.error, args.error_file)
+        matches = SourceStore(args.database).search(error_text, limit=args.limit)
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    result = {"matches": [match.to_dict() for match in matches]}
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif not matches:
+        print("لا توجد حالة مصدر مشابهة ضمن النطاق الحالي.")
+    else:
+        for index, match in enumerate(matches, start=1):
+            record = match.record
+            print(
+                f"{index}. {_terminal_text(record.source_id)} | "
+                f"التشابه: {match.score:.0%}"
+            )
+            print("   الحالة: مرشح من المصدر، لم يُتحقق منه محليًا")
+            print(f"   حالة السبب: {record.root_cause_status}")
+            print(f"   اختبار المصدر: {_terminal_text(record.test_command)}")
+            print("   الرقعة الكاملة متاحة في حقل solution_patch عند استخدام --json")
+    return 0
+
+
+def _read_swebench_rows(path: Path) -> tuple[dict[str, object], ...]:
+    payload = json.loads(_read_limited_text(path, limit=20_000_000))
+    if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+        raise ValueError("SWE-bench input must contain a rows array")
+    rows: list[dict[str, object]] = []
+    for item in payload["rows"]:
+        row = item.get("row") if isinstance(item, dict) else None
+        if not isinstance(row, dict):
+            raise ValueError("each SWE-bench row must be an object")
+        rows.append(row)
+    return tuple(rows)
+
+
+def _read_limited_text(path: Path, *, limit: int) -> str:
+    with path.open("rb") as stream:
+        payload = stream.read(limit + 1)
+    if len(payload) > limit:
+        raise ValueError(f"input file exceeds {limit} bytes")
+    return payload.decode("utf-8")
+
+
+def _terminal_text(value: str, *, multiline: bool = False) -> str:
+    bidi_controls = {
+        0x200E,
+        0x200F,
+        0x202A,
+        0x202B,
+        0x202C,
+        0x202D,
+        0x202E,
+        0x2066,
+        0x2067,
+        0x2068,
+        0x2069,
+    }
+    safe: list[str] = []
+    for character in value:
+        codepoint = ord(character)
+        if multiline and character in {"\n", "\r", "\t"}:
+            safe.append(character)
+        elif codepoint < 32 or 127 <= codepoint <= 159 or codepoint in bidi_controls:
+            width = 4 if codepoint <= 0xFFFF else 8
+            safe.append(f"\\u{codepoint:0{width}x}")
+        else:
+            safe.append(character)
+    return "".join(safe)
+
+
+def _print_json_or_summary(as_json: bool, result: dict[str, object]) -> None:
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"المصدر: {result['source']} | سجلات جديدة: {result['stored_raw']} | "
+            f"إجمالي الخام: {result['source_records']} | "
+            f"نسخ محفوظة: {result.get('source_versions', result['source_records'])} | "
+            f"مرقاة: {result['promoted']}"
+        )
+
+
+def _print_analysis(result: object) -> None:
+    primary = result.primary
+    print(f"القضية: {_terminal_text(result.case_id)}")
+    print(f"التشخيص: {_terminal_text(primary.explanation)}")
+    print(f"الموقع: {_terminal_text(primary.location or 'غير محدد')}")
+    print(f"الثقة: {primary.confidence:.0%} | الطاقة: {primary.energy:.3f}")
+    if primary.suggested_replacement:
+        print(
+            f"التعديل المرشح: {_terminal_text(primary.target)} -> "
+            f"{_terminal_text(primary.suggested_replacement)}"
+        )
+    print("الأدلة:")
+    for evidence in primary.evidence:
+        print(
+            f"- [{_terminal_text(evidence.source)}] "
+            f"{_terminal_text(evidence.summary)}"
+        )
+    for question in result.questions:
+        print(f"سؤال مطلوب: {_terminal_text(question)}")
+    for risk in result.residual_risks:
+        print(f"مخاطرة متبقية: {_terminal_text(risk)}")
+    print(f"زمن التحليل: {result.elapsed_ms:.3f} ms")
+
+
+def _print_patch(patch: PatchResult) -> None:
+    print(f"التحقق: {patch.verification.grade}")
+    print(f"الحالة: {'طُبق' if patch.applied else 'معاينة فقط'}")
+    print(_terminal_text(patch.diff, multiline=True))
+
+
+def _print_memory_matches(matches: object) -> None:
+    print("حالات موثقة مشابهة:")
+    for index, match in enumerate(matches, start=1):
+        print(
+            f"{index}. {_terminal_text(match.episode.title)} | "
+            f"التشابه: {match.score:.0%}"
+        )
+        print(f"   السبب السابق: {_terminal_text(match.episode.root_cause)}")
+        print(
+            f"   نمط الإصلاح: {_terminal_text(match.episode.patch_pattern.from_value)} -> "
+            f"{_terminal_text(match.episode.patch_pattern.to_value)}"
+        )
+        print(f"   درجة الدليل: {match.episode.verification.grade}")
+
+
+def _read_error(error: str | None, error_file: Path | None) -> str:
+    if error is not None:
+        return error
+    if error_file is None:
+        raise ValueError("error input is required")
+    return _read_limited_text(error_file, limit=1_000_000)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
