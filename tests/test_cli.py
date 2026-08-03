@@ -29,7 +29,7 @@ class CliTests(unittest.TestCase):
             exit_code = main(["--version"])
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("burhan 0.7.0", output.getvalue())
+        self.assertIn("burhan 0.7.1", output.getvalue())
 
     def test_public_version_sources_are_consistent(self) -> None:
         project = Path(__file__).resolve().parents[1]

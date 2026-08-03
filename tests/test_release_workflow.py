@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -50,6 +51,19 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         docker_job = self._job("publish-docker")
         self.assertNotIn("packages: write", top_level)
         self.assertIn("packages: write", docker_job)
+
+    def test_project_declares_agpl_v3_license(self) -> None:
+        project = Path(__file__).parents[1]
+        config = tomllib.loads(
+            (project / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        metadata = config["project"]
+        license_text = (project / "LICENSE").read_text(encoding="utf-8")
+
+        self.assertIn("setuptools>=77", config["build-system"]["requires"])
+        self.assertEqual(metadata["license"], "AGPL-3.0-only")
+        self.assertIn("GNU AFFERO GENERAL PUBLIC LICENSE", license_text)
+        self.assertIn("Version 3, 19 November 2007", license_text)
 
 
 if __name__ == "__main__":

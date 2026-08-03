@@ -37,7 +37,7 @@ NameError: name 'grete' is not defined
         self.assertTrue(any("NameError" in evidence.summary for evidence in result.primary.evidence))
         self.assertTrue(any(node.label == "greet" for node in result.state.nodes))
         self.assertTrue(result.case_id.startswith("case-"))
-        self.assertEqual(result.provenance.engine_version, "0.7.0")
+        self.assertEqual(result.provenance.engine_version, "0.7.1")
         self.assertTrue(result.provenance.input_fingerprint.startswith("sha256:"))
         self.assertTrue(result.residual_risks)
 
