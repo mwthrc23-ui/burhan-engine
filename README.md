@@ -3,6 +3,7 @@
 [![CI](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Container](https://img.shields.io/badge/GHCR-burhan--engine-2496ED?logo=docker&logoColor=white)](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine)
 
 **Evidence-first software diagnosis and repair verification for Python and TypeScript.**
@@ -18,9 +19,11 @@ burhan --help
 - ينشئ معاينة إصلاح صغيرة من دون تغيير الأصل افتراضيًا.
 - يثبت انتقال الاختبار من الفشل إلى النجاح داخل Docker مع عزل وحدود موارد.
 
-[PyPI](https://pypi.org/project/burhan-engine/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Releases](https://github.com/mwthrc23-ui/burhan-engine/releases) · [Security policy](SECURITY.md)
+[PyPI](https://pypi.org/project/burhan-engine/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Releases](https://github.com/mwthrc23-ui/burhan-engine/releases) · [License](LICENSE) · [Security policy](SECURITY.md)
 
-هذه النسخة `0.7.0` تضيف **Burhan Evidence Gate** كمرحلة تجارية أولى: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
+هذه النسخة `0.7.1` توفر **Burhan Evidence Gate**: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
+
+حقوق النشر © 2026 مساهمو Burhan Engine. بُرهان برنامج حر ومفتوح المصدر مرخص بموجب `AGPL-3.0-only`. إذا وزعت نسخة معدلة، أو أتحت نسخة معدلة ليتفاعل معها المستخدمون عبر شبكة، فيجب أن تتيح لهم المصدر المقابل لتلك النسخة وفق شروط [الترخيص](LICENSE).
 
 ## البدء السريع (أسهل طريق)
 
@@ -63,13 +66,13 @@ burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" -
 اسحب الصورة المنشورة:
 
 ```bash
-docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.7.0
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.7.1
 ```
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.7.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.7.1 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -111,7 +114,7 @@ burhan ci-gate \
   env:
     BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
   run: |
-    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.7.0"
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.7.1"
     docker pull "$BURHAN_DOCKER_IMAGE"
 - name: Load protected Burhan policy
   env:
