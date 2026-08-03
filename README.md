@@ -1,6 +1,24 @@
-# بُرهان
+# بُرهان | Burhan Engine
 
-بُرهان محرك تجريبي يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة ودالة طاقة.
+[![CI](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
+[![Python](https://img.shields.io/pypi/pyversions/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
+[![Container](https://img.shields.io/badge/GHCR-burhan--engine-2496ED?logo=docker&logoColor=white)](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine)
+
+**Evidence-first software diagnosis and repair verification for Python and TypeScript.**
+
+بُرهان محرك تشخيص وإثبات إصلاح يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة بدل التخمين.
+
+```bash
+python -m pip install burhan-engine
+burhan --help
+```
+
+- يشخّص الأخطاء ويعرض الأدلة والمخاطر المتبقية.
+- ينشئ معاينة إصلاح صغيرة من دون تغيير الأصل افتراضيًا.
+- يثبت انتقال الاختبار من الفشل إلى النجاح داخل Docker مع عزل وحدود موارد.
+
+[PyPI](https://pypi.org/project/burhan-engine/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Releases](https://github.com/mwthrc23-ui/burhan-engine/releases) · [Security policy](SECURITY.md)
 
 هذه النسخة `0.7.0` تضيف **Burhan Evidence Gate** كمرحلة تجارية أولى: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
 
@@ -42,16 +60,16 @@ burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" -
 
 ### 3) تشغيل عبر Docker بدون إعداد Python محلي
 
-ابنِ الصورة:
+اسحب الصورة المنشورة:
 
 ```bash
-docker build -t burhan-engine:local .
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.7.0
 ```
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace burhan-engine:local analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.7.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -127,7 +145,8 @@ burhan ci-gate \
 يشغّل الأمر التالي التجربة على نسخة مؤقتة: تحليل الخطأ، معاينة patch، تطبيقه، ثم تشغيل الكود المصحح. لا يغيّر ملف المثال الأصلي.
 
 ```powershell
-cd C:\Users\tkssy\OneDrive\ドキュメント\Burhan
+git clone https://github.com/mwthrc23-ui/burhan-engine.git
+cd burhan-engine
 powershell -ExecutionPolicy Bypass -File scripts\try-burhan.ps1
 ```
 
@@ -294,7 +313,8 @@ powershell -ExecutionPolicy Bypass -File scripts\try-source-memory.ps1
 يتطلب Python 3.11 أو أحدث.
 
 ```powershell
-cd C:\Users\tkssy\OneDrive\ドキュメント\Burhan
+git clone https://github.com/mwthrc23-ui/burhan-engine.git
+cd burhan-engine
 $env:PYTHONPATH = "$PWD\src"
 python -m burhan analyze `
   --project examples\python-name-error `
