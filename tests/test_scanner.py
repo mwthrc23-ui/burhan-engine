@@ -67,6 +67,50 @@ class CodeTreeTests(unittest.TestCase):
         self.assertIn("MyClass", symbol_names)
         self.assertIn("helper", symbol_names)
 
+    def test_class_methods_are_nested_inside_class_node(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "service.py").write_text(
+                "class Service:\n"
+                "    def start(self): pass\n"
+                "    def stop(self): pass\n"
+                "\n"
+                "def standalone(): pass\n",
+                encoding="utf-8",
+            )
+
+            snapshot = ProjectScanner().scan(root)
+            tree = build_code_tree(snapshot)
+
+        file_node = next(c for c in tree.children if c.name == "service.py")
+        top_level_names = {child.name for child in file_node.children}
+        self.assertIn("Service", top_level_names)
+        self.assertIn("standalone", top_level_names)
+
+        class_node = next(c for c in file_node.children if c.name == "Service")
+        self.assertEqual(class_node.kind, "class")
+        method_names = {m.name for m in class_node.children}
+        self.assertIn("start", method_names)
+        self.assertIn("stop", method_names)
+
+    def test_methods_not_duplicated_at_file_level(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "model.py").write_text(
+                "class Model:\n"
+                "    def save(self): pass\n",
+                encoding="utf-8",
+            )
+
+            snapshot = ProjectScanner().scan(root)
+            tree = build_code_tree(snapshot)
+
+        file_node = next(c for c in tree.children if c.name == "model.py")
+        file_level_names = [child.name for child in file_node.children]
+        # "save" must not appear at the file level—only inside Model
+        self.assertNotIn("save", file_level_names)
+        self.assertIn("Model", file_level_names)
+
     def test_subdirectory_becomes_nested_directory_node(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

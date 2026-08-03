@@ -157,6 +157,7 @@ class AnalysisResult:
     provenance: Provenance
     residual_risks: tuple[str, ...] = ()
     questions: tuple[str, ...] = ()
+    code_tree: "CodeTreeNode | None" = None
 
     @property
     def primary(self) -> Hypothesis:
@@ -169,7 +170,7 @@ class AnalysisResult:
         return self.primary.confidence
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "case_id": self.case_id,
             "state": self.state.to_dict(),
             "hypotheses": [hypothesis.to_dict() for hypothesis in self.hypotheses],
@@ -179,3 +180,6 @@ class AnalysisResult:
             "residual_risks": list(self.residual_risks),
             "provenance": self.provenance.to_dict(),
         }
+        if self.code_tree is not None:
+            result["code_tree"] = self.code_tree.to_dict()
+        return result

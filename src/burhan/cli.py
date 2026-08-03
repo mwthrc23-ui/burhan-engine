@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--memory", type=Path, help="قاعدة ذاكرة إصلاحات SQLite")
     analyze.add_argument("--dependency", action="append", default=[], help="اعتماد موجود في سياق الخطأ")
     analyze.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    analyze.add_argument("--code-tree", action="store_true", help="أضف شجرة الكود إلى المخرجات")
     repair = subcommands.add_parser("repair", help="شخّص وأنشئ patch آمنًا لمعاينته")
     _add_case_arguments(repair)
     repair.add_argument("--apply", action="store_true", help="طبّق patch بعد اجتياز تحقق V0")
@@ -239,6 +240,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_analysis(result)
+        if args.command == "analyze" and getattr(args, "code_tree", False) and result.code_tree is not None:
+            print("شجرة الكود:")
+            lines: list[str] = []
+            _render_code_tree(result.code_tree, prefix="", is_last=True, lines=lines, depth=0, max_depth=None)
+            print("\n".join(lines))
         if memory_matches:
             _print_memory_matches(memory_matches)
         if patch is not None:

@@ -476,31 +476,35 @@ _JS_SYMBOL_RE = re.compile(
 )
 
 
-def _symbol_kind_from_ast(node: ast.AST) -> tuple[str, str] | None:
-    """Return (name, kind) for a top-level AST definition node, or None."""
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return node.name, "function"
-    if isinstance(node, ast.ClassDef):
-        return node.name, "class"
-    return None
-
-
 def _extract_file_children(source_file: SourceFile) -> tuple[CodeTreeNode, ...]:
-    """Return symbol nodes for a source file using AST for Python, regex for JS/TS."""
+    """Return symbol nodes for a source file using AST for Python, regex for JS/TS.
+
+    For Python files the tree is **nested**: methods and nested classes appear as
+    children of their enclosing class node rather than at the file level.  Only
+    top-level definitions are placed directly under the file node.
+    """
     path = source_file.relative_path
     children: list[CodeTreeNode] = []
 
     if path.endswith((".py", ".pyi")):
         try:
-            tree = ast.parse(source_file.content)
+            parsed = ast.parse(source_file.content)
         except SyntaxError:
             return ()
-        for node in ast.walk(tree):
-            result = _symbol_kind_from_ast(node)
-            if result is not None:
-                name, kind = result
-                children.append(CodeTreeNode(name=name, kind=kind))
-        return tuple(dict.fromkeys(c.name for c in children) and children or children)
+        for node in ast.iter_child_nodes(parsed):
+            if isinstance(node, ast.ClassDef):
+                method_nodes: list[CodeTreeNode] = []
+                for item in ast.iter_child_nodes(node):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        method_nodes.append(CodeTreeNode(name=item.name, kind="function"))
+                    elif isinstance(item, ast.ClassDef):
+                        method_nodes.append(CodeTreeNode(name=item.name, kind="class"))
+                children.append(
+                    CodeTreeNode(name=node.name, kind="class", children=tuple(method_nodes))
+                )
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                children.append(CodeTreeNode(name=node.name, kind="function"))
+        return tuple(children)
 
     if path.endswith((".ts", ".tsx", ".js", ".jsx")):
         seen: set[str] = set()

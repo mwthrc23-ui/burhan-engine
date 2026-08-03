@@ -10,7 +10,7 @@ from time import perf_counter
 
 from .energy import confidence_from_energy, hypothesis_energy
 from .model import AnalysisResult, BirEdge, BirNode, BurhanState, Evidence, Hypothesis, NodeKind, Provenance
-from .scanner import ProjectScanner, ProjectSnapshot, SourceFile
+from .scanner import ProjectScanner, ProjectSnapshot, SourceFile, build_code_tree
 
 
 PYTHON_FRAME = re.compile(r'File\s+["\'](?P<file>[^"\']+)["\'],\s+line\s+(?P<line>\d+)')
@@ -44,6 +44,7 @@ class BurhanAnalyzer:
             raise ValueError("error text must not be empty")
 
         snapshot = self._scanner.scan(project)
+        code_tree = build_code_tree(snapshot)
         state, symbols = self._build_state(snapshot, goal, error_text)
         hypotheses, questions = self._diagnose(error_text, symbols)
         state = self._attach_hypotheses(state, hypotheses)
@@ -63,6 +64,7 @@ class BurhanAnalyzer:
             ),
             residual_risks=residual_risks,
             questions=questions,
+            code_tree=code_tree,
         )
 
     def _build_state(

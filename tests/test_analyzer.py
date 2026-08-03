@@ -147,6 +147,51 @@ AttributeError: 'ApiClient' object has no attribute 'send'
         self.assertLess(result.confidence, 0.5)
         self.assertTrue(result.questions)
 
+    def test_analysis_result_includes_code_tree(self) -> None:
+        source = """\
+class Processor:
+    def run(self): pass
+    def stop(self): pass
+
+def main(): pass
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "proc.py").write_text(source, encoding="utf-8")
+
+            result = BurhanAnalyzer().analyze(root, "افهم المشكلة", "something unusual happened")
+
+        self.assertIsNotNone(result.code_tree)
+        assert result.code_tree is not None
+        # Root is a directory
+        self.assertEqual(result.code_tree.kind, "directory")
+        # proc.py is a child of root
+        file_names = {node.name for node in result.code_tree.children}
+        self.assertIn("proc.py", file_names)
+        file_node = next(n for n in result.code_tree.children if n.name == "proc.py")
+        top_names = {n.name for n in file_node.children}
+        self.assertIn("Processor", top_names)
+        self.assertIn("main", top_names)
+        # Methods are nested inside the class, not at file level
+        self.assertNotIn("run", top_names)
+        class_node = next(n for n in file_node.children if n.name == "Processor")
+        method_names = {m.name for m in class_node.children}
+        self.assertIn("run", method_names)
+        self.assertIn("stop", method_names)
+
+    def test_analysis_result_to_dict_includes_code_tree(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("def run(): pass\n", encoding="utf-8")
+
+            result = BurhanAnalyzer().analyze(root, "افهم المشكلة", "something unusual happened")
+
+        payload = json.dumps(result.to_dict(), ensure_ascii=False)
+        self.assertIn("code_tree", payload)
+        self.assertIn("app.py", payload)
+
 
 if __name__ == "__main__":
     unittest.main()
