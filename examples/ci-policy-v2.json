@@ -1,0 +1,30 @@
+{
+  "schema_version": "burhan.gate-policy/v1",
+  "minimum_grade": "V2",
+  "minimum_confidence": 0.8,
+  "require_complete_scan": true,
+  "require_original_unchanged": true,
+  "allowed_backends": [
+    "docker"
+  ],
+  "allowed_command_fingerprints": [
+    "sha256:0acbaa2cc2db89585e3e81b736d2a60359bf2c011c2bc8396bc71626fbcac9cc"
+  ],
+  "allowed_runtime_fingerprints": [
+    "sha256:3d763786bbf1040e7e9e0ad439d54db99b332cf0d248959d74e18471509ec8b0"
+  ],
+  "required_checks": [
+    "temporary_copy",
+    "test_failed_before_patch",
+    "patch_applied_to_copy",
+    "test_passed_after_patch",
+    "original_unchanged",
+    "shell_false",
+    "sanitized_environment",
+    "parent_timeout_enforced",
+    "network_disabled",
+    "read_only_container",
+    "capabilities_dropped",
+    "resource_limits"
+  ]
+}

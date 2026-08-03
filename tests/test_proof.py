@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
+import stat
 from pathlib import Path
 from unittest.mock import patch
 
 from burhan.model import Hypothesis
-from burhan.patcher import CommandRun, ProofRunner
+from burhan.patcher import CommandRun, ProofConfigurationError, ProofRejected, ProofRunner
 
 
 BROKEN_SCRIPT = """\
@@ -47,6 +49,131 @@ def undefined_name_hypothesis(location: str = "app.py:4") -> Hypothesis:
 
 
 class ProofRunnerTests(unittest.TestCase):
+    def test_original_manifest_has_unambiguous_record_framing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            first = project / "a"
+            second = project / "b"
+            first.write_bytes(b"x")
+            second.write_bytes(b"y")
+            before = ProofRunner._project_manifest(project)
+
+            second.unlink()
+            first.write_bytes(b"x\0F\0b\0y")
+            after = ProofRunner._project_manifest(project)
+
+        self.assertNotEqual(before, after)
+
+    def test_original_manifest_binds_windows_junction_target(self) -> None:
+        class ReparseStat:
+            st_mode = 0o40755
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def synthetic_walk(*args: object, **kwargs: object):
+                del args, kwargs
+                return iter(((root, (), ("junction",)),))
+
+            with (
+                patch("burhan.patcher.bounded_walk", side_effect=synthetic_walk),
+                patch("burhan.patcher.is_reparse_path", return_value=True, create=True),
+                patch.object(Path, "lstat", return_value=ReparseStat()),
+                patch("burhan.patcher.os.readlink", return_value="target-one"),
+            ):
+                before = ProofRunner._project_manifest(root)
+            with (
+                patch("burhan.patcher.bounded_walk", side_effect=synthetic_walk),
+                patch("burhan.patcher.is_reparse_path", return_value=True, create=True),
+                patch.object(Path, "lstat", return_value=ReparseStat()),
+                patch("burhan.patcher.os.readlink", return_value="target-two"),
+            ):
+                after = ProofRunner._project_manifest(root)
+
+        self.assertNotEqual(before, after)
+
+    def test_original_manifest_detects_permission_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            source = project / "app.py"
+            source.write_text(BROKEN_SCRIPT, encoding="utf-8")
+            before = ProofRunner._project_manifest(project)
+            os.chmod(source, stat.S_IREAD)
+            after = ProofRunner._project_manifest(project)
+            os.chmod(source, stat.S_IREAD | stat.S_IWRITE)
+
+        self.assertNotEqual(before, after)
+
+    def test_local_proof_refuses_secrets_it_cannot_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+            (project / ".env").write_text("TOKEN=secret", encoding="utf-8")
+
+            with self.assertRaisesRegex(ProofConfigurationError, "secret files"):
+                ProofRunner().prove(
+                    project,
+                    undefined_name_hypothesis(),
+                    timeout_seconds=5,
+                )
+
+    def test_original_manifest_does_not_open_secret_files(self) -> None:
+        original_open = Path.open
+
+        def guarded_open(path: Path, *args: object, **kwargs: object):
+            if path.name == ".env":
+                raise AssertionError("secret contents must not be read")
+            return original_open(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / ".env").write_text("TOKEN=secret", encoding="utf-8")
+            with patch.object(Path, "open", guarded_open):
+                fingerprint = ProofRunner._project_manifest(project)
+
+        self.assertRegex(fingerprint, r"^[0-9a-f]{64}$")
+
+    def test_prove_rejects_target_outside_scanner_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            hidden = project / ".hidden"
+            hidden.mkdir()
+            (hidden / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+
+            with self.assertRaisesRegex(ProofConfigurationError, "scan scope"):
+                ProofRunner().prove(
+                    project,
+                    undefined_name_hypothesis(location=".hidden/app.py:4"),
+                    timeout_seconds=5,
+                )
+
+    def test_prove_rejects_when_any_original_project_file_changes(self) -> None:
+        failed = matching_failure()
+        passed = CommandRun(0, False, 8.0, "Hi Ada\n", "", False)
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+            sentinel = project / "sentinel.txt"
+            sentinel.write_text("original", encoding="utf-8")
+            calls = 0
+
+            def mutate_original(*args: object, **kwargs: object) -> CommandRun:
+                nonlocal calls
+                del args, kwargs
+                calls += 1
+                if calls == 1:
+                    sentinel.write_text("changed", encoding="utf-8")
+                    return failed
+                return passed
+
+            with patch.object(ProofRunner, "_run", side_effect=mutate_original):
+                with self.assertRaisesRegex(ProofRejected, "original project changed"):
+                    ProofRunner().prove(
+                        project,
+                        undefined_name_hypothesis(),
+                        timeout_seconds=5,
+                    )
+
     def test_docker_fail_to_pass_is_graded_v2(self) -> None:
         failed = matching_failure()
         passed = CommandRun(0, False, 8.0, "Hi Ada\n", "", False)
@@ -231,7 +358,7 @@ print("healthy")
             project = Path(directory)
             (project / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "pinned by sha256 digest"):
+            with self.assertRaisesRegex(ValueError, "pinned Docker image"):
                 ProofRunner().prove(
                     project,
                     undefined_name_hypothesis(),
@@ -265,6 +392,49 @@ print("healthy")
             for name in secret_names:
                 with self.subTest(name=name):
                     self.assertFalse((destination / name).exists())
+
+    def test_copy_prunes_ignored_directories_before_counting_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "copy"
+            (source / "src").mkdir(parents=True)
+            (source / "src" / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+            ignored = source / "node_modules" / "a" / "b" / "c"
+            ignored.mkdir(parents=True)
+            (ignored / "payload.js").write_text("ignored", encoding="utf-8")
+
+            with patch.object(ProofRunner, "_MAX_DIRECTORIES", 2):
+                ProofRunner._copy_project(source, destination)
+
+            self.assertTrue((destination / "src" / "app.py").is_file())
+            self.assertFalse((destination / "node_modules").exists())
+
+    def test_copy_rejects_directory_depth_over_the_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "copy"
+            deep = source / "one" / "two" / "three"
+            deep.mkdir(parents=True)
+            (deep / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+
+            with patch.object(ProofRunner, "_MAX_DIRECTORY_DEPTH", 2):
+                with self.assertRaisesRegex(ValueError, "directory depth"):
+                    ProofRunner._copy_project(source, destination)
+
+    def test_copy_rejects_too_many_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "copy"
+            source.mkdir()
+            for name in ("one", "two", "three"):
+                (source / name).mkdir()
+
+            with patch.object(ProofRunner, "_MAX_DIRECTORIES", 2):
+                with self.assertRaisesRegex(ValueError, "directory count"):
+                    ProofRunner._copy_project(source, destination)
 
     def test_prove_accepts_pytest_as_a_test_program(self) -> None:
         module_text = """\
@@ -313,6 +483,116 @@ def test_run():
                             test_program=program,
                             timeout_seconds=5,
                         )
+
+    def test_command_rejects_excessive_argument_count_and_total_size(self) -> None:
+        with self.assertRaisesRegex(ValueError, "count or total-size"):
+            ProofRunner._command("python", tuple("x" for _ in range(65)))
+        with self.assertRaisesRegex(ValueError, "count or total-size"):
+            ProofRunner._command("python", tuple("x" * 4_000 for _ in range(5)))
+
+    def test_local_pytest_requires_an_installed_runtime(self) -> None:
+        with patch("burhan.patcher.importlib.util.find_spec", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "pytest is not installed"):
+                ProofRunner().prove(
+                    Path("."),
+                    undefined_name_hypothesis(),
+                    test_program="pytest",
+                    backend="local",
+                )
+
+    def test_docker_image_cannot_inject_cli_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+
+            with self.assertRaisesRegex(ProofConfigurationError, "pinned Docker image"):
+                ProofRunner().prove(
+                    project,
+                    undefined_name_hypothesis(),
+                    backend="docker",
+                    docker_image="--label=unsafe@sha256:" + "a" * 64,
+                    timeout_seconds=5,
+                )
+
+    def test_prove_rejects_project_changed_after_analysis_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            (project / "app.py").write_text(BROKEN_SCRIPT, encoding="utf-8")
+            expected = ProofRunner.fingerprint_project(project, backend="local")
+            (project / "fixture.txt").write_text("changed", encoding="utf-8")
+
+            with self.assertRaisesRegex(ProofRejected, "analysis snapshot"):
+                ProofRunner().prove(
+                    project,
+                    undefined_name_hypothesis(),
+                    expected_project_fingerprint=expected,
+                    timeout_seconds=5,
+                )
+
+    def test_copy_and_manifest_bound_all_directory_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "copy"
+            (root / "entry-one").write_text("one", encoding="utf-8")
+            (root / "entry-two").write_text("two", encoding="utf-8")
+
+            with (
+                patch.object(ProofRunner, "_MAX_ENTRIES", 1, create=True),
+                self.assertRaisesRegex(ProofConfigurationError, "entry count"),
+            ):
+                ProofRunner._copy_project(root, destination)
+
+            with (
+                patch.object(ProofRunner, "_MAX_MANIFEST_ENTRIES", 1, create=True),
+                self.assertRaisesRegex(ProofConfigurationError, "entry count"),
+            ):
+                ProofRunner._project_manifest(root)
+
+    def test_docker_reserved_exit_codes_are_infrastructure_failures(self) -> None:
+        failed = CommandRun(
+            exit_code=125,
+            timed_out=False,
+            duration_ms=1,
+            stdout="",
+            stderr="daemon failure",
+            output_truncated=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("burhan.patcher.shutil.which", return_value="docker"):
+                with patch.object(ProofRunner, "_run", return_value=failed):
+                    with self.assertRaisesRegex(RuntimeError, "Docker could not start"):
+                        ProofRunner._run_docker(
+                            ("python", "app.py"),
+                            root,
+                            image=PINNED_PYTHON_IMAGE,
+                            timeout_seconds=5,
+                        )
+
+    def test_docker_cleanup_timeout_is_an_infrastructure_failure(self) -> None:
+        timed_out = CommandRun(
+            exit_code=None,
+            timed_out=True,
+            duration_ms=5,
+            stdout="",
+            stderr="",
+            output_truncated=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("burhan.patcher.shutil.which", return_value="docker"):
+                with patch.object(ProofRunner, "_run", return_value=timed_out):
+                    with patch(
+                        "burhan.patcher.subprocess.run",
+                        side_effect=TimeoutError("SECRET_CLEANUP"),
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                            ProofRunner._run_docker(
+                                ("python", "app.py"),
+                                root,
+                                image=PINNED_PYTHON_IMAGE,
+                                timeout_seconds=5,
+                            )
 
 
 if __name__ == "__main__":

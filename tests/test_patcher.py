@@ -90,6 +90,23 @@ class PatchEngineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly once"):
                 PatchEngine().repair(root, hypothesis)
 
+    def test_repair_wraps_invalid_patched_python_as_a_safe_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("print(bad)\nif :\n    pass\n", encoding="utf-8")
+            hypothesis = Hypothesis(
+                kind="undefined_name",
+                target="bad",
+                explanation="invalid source",
+                location="app.py:1",
+                energy=1.0,
+                confidence=0.9,
+                suggested_replacement="good",
+            )
+
+            with self.assertRaisesRegex(ValueError, "not valid Python"):
+                PatchEngine().repair(root, hypothesis)
+
 
 if __name__ == "__main__":
     unittest.main()

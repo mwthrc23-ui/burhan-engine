@@ -5,9 +5,10 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
+import stat
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from .model import CodeTreeNode
 
@@ -57,14 +58,98 @@ def is_secret_file(path: Path) -> bool:
     }
 
 
+def is_excluded_directory(name: str) -> bool:
+    """Return whether *name* is outside the scanner and proof source scope."""
+
+    return name in EXCLUDED_DIRECTORIES or name.startswith(".")
+
+
+class TraversalLimitError(ValueError):
+    """A bounded directory traversal reached a configured resource limit."""
+
+
+def _is_reparse_entry(entry: os.DirEntry[str]) -> bool:
+    is_junction = getattr(entry, "is_junction", None)
+    if is_junction is not None and is_junction():
+        return True
+    attributes = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_flag)
+
+
+def is_reparse_path(path: Path) -> bool:
+    """Detect Windows reparse points without requiring Path.is_junction (Python 3.12+)."""
+
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is not None and is_junction():
+        return True
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_flag)
+
+
+def bounded_walk(
+    root: Path,
+    *,
+    max_entries: int,
+    max_directories: int,
+    max_depth: int,
+    exclude_directory: Callable[[str], bool] | None = None,
+) -> Iterator[tuple[Path, tuple[str, ...], tuple[str, ...]]]:
+    """Yield a deterministic tree walk while reading at most max_entries + 1 entries."""
+
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    entry_count = 0
+    directory_count = 0
+    while stack:
+        current, depth = stack.pop()
+        directories: list[str] = []
+        names: list[str] = []
+        with os.scandir(current) as entries:
+            for entry in entries:
+                entry_count += 1
+                if entry_count > max_entries:
+                    raise TraversalLimitError("project exceeds entry count limit")
+                is_reparse = _is_reparse_entry(entry)
+                if entry.is_dir(follow_symlinks=False) and not is_reparse:
+                    if exclude_directory is not None and exclude_directory(entry.name):
+                        continue
+                    if depth + 1 > max_depth:
+                        raise TraversalLimitError("project exceeds directory depth limit")
+                    directory_count += 1
+                    if directory_count > max_directories:
+                        raise TraversalLimitError("project exceeds directory count limit")
+                    directories.append(entry.name)
+                else:
+                    names.append(entry.name)
+        directories.sort()
+        names.sort()
+        for name in reversed(directories):
+            stack.append((current / name, depth + 1))
+        yield current, tuple(directories), tuple(names)
+
+
 @dataclass(frozen=True, slots=True)
 class ScanLimits:
     max_files: int = 500
+    max_entries: int = 10_000
+    max_directories: int = 2_000
+    max_directory_depth: int = 32
     max_file_bytes: int = 1_000_000
     max_total_bytes: int = 10_000_000
 
     def __post_init__(self) -> None:
-        if self.max_files <= 0 or self.max_file_bytes <= 0 or self.max_total_bytes <= 0:
+        if any(
+            value <= 0
+            for value in (
+                self.max_files,
+                self.max_entries,
+                self.max_directories,
+                self.max_directory_depth,
+                self.max_file_bytes,
+                self.max_total_bytes,
+            )
+        ):
             raise ValueError("scan limits must be positive")
 
 
@@ -81,11 +166,16 @@ class ProjectSnapshot:
     files: tuple[SourceFile, ...]
     skipped_secret_files: int = 0
     skipped_oversized_files: int = 0
+    skipped_unreadable_files: int = 0
     truncated: bool = False
 
     @property
     def combined_text(self) -> str:
         return "\n".join(item.content for item in self.files)
+
+    @property
+    def incomplete(self) -> bool:
+        return self.truncated or self.skipped_oversized_files > 0 or self.skipped_unreadable_files > 0
 
 
 # ---------------------------------------------------------------------------
@@ -207,48 +297,59 @@ class ProjectScanner:
         files: list[SourceFile] = []
         skipped_secrets = 0
         skipped_oversized = 0
+        skipped_unreadable = 0
         total_bytes = 0
         truncated = False
-
-        for current, directories, names in os.walk(root, followlinks=False):
-            directories[:] = sorted(
-                name for name in directories if name not in EXCLUDED_DIRECTORIES and not name.startswith(".")
-            )
-            for name in sorted(names):
-                path = Path(current) / name
-                if is_secret_file(path):
-                    skipped_secrets += 1
-                    continue
-                if path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.is_symlink():
-                    continue
-                if len(files) >= self._limits.max_files:
-                    truncated = True
+        try:
+            for current, _directories, names in bounded_walk(
+                root,
+                max_entries=self._limits.max_entries,
+                max_directories=self._limits.max_directories,
+                max_depth=self._limits.max_directory_depth,
+                exclude_directory=is_excluded_directory,
+            ):
+                for name in names:
+                    path = current / name
+                    if is_secret_file(path):
+                        skipped_secrets += 1
+                        continue
+                    if path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.is_symlink():
+                        continue
+                    if len(files) >= self._limits.max_files:
+                        truncated = True
+                        break
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        skipped_unreadable += 1
+                        continue
+                    if size > self._limits.max_file_bytes:
+                        skipped_oversized += 1
+                        continue
+                    if total_bytes + size > self._limits.max_total_bytes:
+                        truncated = True
+                        break
+                    try:
+                        content = path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        skipped_unreadable += 1
+                        continue
+                    relative = path.relative_to(root).as_posix()
+                    files.append(SourceFile(relative, content, size))
+                    total_bytes += size
+                if truncated:
                     break
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    continue
-                if size > self._limits.max_file_bytes:
-                    skipped_oversized += 1
-                    continue
-                if total_bytes + size > self._limits.max_total_bytes:
-                    truncated = True
-                    break
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue
-                relative = path.relative_to(root).as_posix()
-                files.append(SourceFile(relative, content, size))
-                total_bytes += size
-            if truncated:
-                break
+        except TraversalLimitError:
+            truncated = True
+        except OSError:
+            skipped_unreadable += 1
 
         return ProjectSnapshot(
             root=root,
             files=tuple(files),
             skipped_secret_files=skipped_secrets,
             skipped_oversized_files=skipped_oversized,
+            skipped_unreadable_files=skipped_unreadable,
             truncated=truncated,
         )
 
@@ -297,67 +398,73 @@ class IncrementalProjectScanner(ProjectScanner):
         files: list[SourceFile] = []
         skipped_secrets = 0
         skipped_oversized = 0
+        skipped_unreadable = 0
         total_bytes = 0
         truncated = False
+        try:
+            for current, _directories, names in bounded_walk(
+                root,
+                max_entries=self._limits.max_entries,
+                max_directories=self._limits.max_directories,
+                max_depth=self._limits.max_directory_depth,
+                exclude_directory=is_excluded_directory,
+            ):
+                for name in names:
+                    path = current / name
+                    # Skip the scan cache file itself to avoid polluting results.
+                    if path.resolve() == cache_file_resolved:
+                        continue
+                    if is_secret_file(path):
+                        skipped_secrets += 1
+                        continue
+                    if path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.is_symlink():
+                        continue
+                    if len(files) >= self._limits.max_files:
+                        truncated = True
+                        break
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        skipped_unreadable += 1
+                        continue
+                    size = stat.st_size
+                    if size > self._limits.max_file_bytes:
+                        skipped_oversized += 1
+                        continue
+                    if total_bytes + size > self._limits.max_total_bytes:
+                        truncated = True
+                        break
 
-        for current, directories, names in os.walk(root, followlinks=False):
-            directories[:] = sorted(
-                name for name in directories
-                if name not in EXCLUDED_DIRECTORIES and not name.startswith(".")
-            )
-            for name in sorted(names):
-                path = Path(current) / name
-                # Skip the scan cache file itself to avoid polluting results.
-                if path.resolve() == cache_file_resolved:
-                    continue
-                if is_secret_file(path):
-                    skipped_secrets += 1
-                    continue
-                if path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.is_symlink():
-                    continue
-                if len(files) >= self._limits.max_files:
-                    truncated = True
-                    break
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                size = stat.st_size
-                if size > self._limits.max_file_bytes:
-                    skipped_oversized += 1
-                    continue
-                if total_bytes + size > self._limits.max_total_bytes:
-                    truncated = True
-                    break
+                    relative = path.relative_to(root).as_posix()
 
-                relative = path.relative_to(root).as_posix()
+                    if not cache.needs_reindex(relative, stat):
+                        # Symbols are cached, but the analyzer still needs source content.
+                        try:
+                            content = path.read_text(encoding="utf-8")
+                        except (OSError, UnicodeDecodeError):
+                            skipped_unreadable += 1
+                            continue
+                        files.append(SourceFile(relative, content, size))
+                        total_bytes += size
+                        continue
 
-                if not cache.needs_reindex(relative, stat):
-                    # Use cached content placeholder — symbols already stored.
-                    # We still need the file content for the snapshot so that
-                    # the analyzer can read it; only symbol extraction benefits
-                    # from caching.  Re-read the content (it is cheap compared
-                    # to parsing) but skip symbol extraction.
+                    # File is new or changed — read, parse, update cache.
                     try:
                         content = path.read_text(encoding="utf-8")
                     except (OSError, UnicodeDecodeError):
+                        skipped_unreadable += 1
                         continue
+
+                    symbols = self._extract_symbols_cached(relative, content)
+                    cache.update(relative, stat, content, symbols)
                     files.append(SourceFile(relative, content, size))
                     total_bytes += size
-                    continue
-
-                # File is new or changed — read, parse, update cache.
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue
-
-                symbols = self._extract_symbols_cached(relative, content)
-                cache.update(relative, stat, content, symbols)
-                files.append(SourceFile(relative, content, size))
-                total_bytes += size
-            if truncated:
-                break
+                if truncated:
+                    break
+        except TraversalLimitError:
+            truncated = True
+        except OSError:
+            skipped_unreadable += 1
 
         cache.flush()
         return ProjectSnapshot(
@@ -365,6 +472,7 @@ class IncrementalProjectScanner(ProjectScanner):
             files=tuple(files),
             skipped_secret_files=skipped_secrets,
             skipped_oversized_files=skipped_oversized,
+            skipped_unreadable_files=skipped_unreadable,
             truncated=truncated,
         )
 
