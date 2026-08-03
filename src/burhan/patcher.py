@@ -525,15 +525,22 @@ class ProofRunner:
 
     @staticmethod
     def _baseline_matches_hypothesis(run: CommandRun, hypothesis: Hypothesis) -> bool:
-        if hypothesis.kind != "undefined_name" or not hypothesis.location:
+        if hypothesis.kind not in ("undefined_name", "unbound_local_variable") or not hypothesis.location:
             return False
         relative_hint, line_number = PatchEngine._parse_location(hypothesis.location)
         combined = f"{run.stdout}\n{run.stderr}".replace("\\", "/")
         target = re.escape(hypothesis.target)
-        name_error = re.search(
-            rf"NameError:\s*name\s*['\"]{target}['\"]\s*is not defined",
-            combined,
-        )
+        if hypothesis.kind == "unbound_local_variable":
+            name_error = re.search(
+                rf"UnboundLocalError:\s+(?:cannot access local variable\s+|local variable\s+)"
+                rf"['\"]?{target}['\"]?",
+                combined,
+            )
+        else:
+            name_error = re.search(
+                rf"NameError:\s*name\s*['\"]{target}['\"]\s*is not defined",
+                combined,
+            )
         normalized_hint = relative_hint.replace("\\", "/")
         locations = {normalized_hint}
         if "/" not in normalized_hint:

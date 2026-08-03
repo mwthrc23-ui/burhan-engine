@@ -314,9 +314,10 @@ class SourceStore:
                     SELECT MAX(rowid) FROM source_record_versions GROUP BY source_id
                 )
                 AND classification_status = ?
+                AND error_kind = ?
                 ORDER BY CASE WHEN attribute_name = ? THEN 0 ELSE 1 END, source_id
                 """,
-                (matched_status, matched_token),
+                (matched_status, matched_kind, matched_token),
             ).fetchall()
             ranked: list[tuple[float, str, str, tuple[str, ...]]] = []
             for source_id, payload_sha256, candidate_token in indexed_rows:

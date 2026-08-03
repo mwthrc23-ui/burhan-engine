@@ -16,8 +16,13 @@ from .scanner import ProjectScanner, ProjectSnapshot, SourceFile, build_code_tre
 PYTHON_FRAME = re.compile(r'File\s+["\'](?P<file>[^"\']+)["\'],\s+line\s+(?P<line>\d+)')
 PYTHON_NAME_ERROR = re.compile(r"NameError:\s+name\s+['\"](?P<name>[^'\"]+)['\"]\s+is not defined")
 PYTHON_UNBOUND_ERROR = re.compile(
-    r"UnboundLocalError:\s+(?:cannot access local variable\s+['\"](?P<name2>[^'\"]+)['\"].+before assignment"
-    r"|local variable\s+['\"](?P<name>[^'\"]+)['\"]\s+referenced before assignment)"
+    r"UnboundLocalError:\s+(?:"
+    r"cannot access local variable\s+['\"](?P<name2>[^'\"]+)['\"]"
+    r"|local variable\s+['\"](?P<name>[^'\"]+)['\"]\s+referenced before assignment"
+    r")"
+)
+PYTHON_IMPORT_NAME_ERROR = re.compile(
+    r"ImportError:\s+cannot import name\s+['\"](?P<name>[^'\"]+)['\"](?:\s+from\s+['\"](?P<module>[^'\"]+)['\"])?"
 )
 PYTHON_MODULE_ERROR = re.compile(
     r"(?:ModuleNotFoundError|ImportError):\s+(?:No module named\s+)?['\"](?P<name>[^'\"]+)['\"]"
@@ -42,9 +47,12 @@ PYTHON_KEY_ERROR = re.compile(r"KeyError:\s+(?P<key>[^\n]+)")
 PYTHON_ZERO_DIV_ERROR = re.compile(r"ZeroDivisionError:\s+(?P<message>[^\n]+)")
 PYTHON_RECURSION_ERROR = re.compile(r"RecursionError:\s+(?P<message>[^\n]+)")
 PYTHON_FILE_NOT_FOUND = re.compile(
-    r"FileNotFoundError:\s+\[Errno 2\]\s+No such file or directory:\s+'(?P<path>[^']+)'"
+    r"FileNotFoundError:\s+(?:\[(?:Errno|WinError)\s+\d+\]\s+[^:]+:\s+)?['\"](?P<path>[^'\"]+)['\"]"
 )
-PYTHON_OS_ERROR = re.compile(r"(?:OSError|IOError):\s+\[Errno\s+(?P<errno>\d+)\]\s+(?P<message>[^:]+):\s+'(?P<path>[^']+)'")
+PYTHON_OS_ERROR = re.compile(
+    r"(?:OSError|IOError):\s+\[(?:Errno|WinError)\s+(?P<errno>\d+)\]\s+(?P<message>[^:\n]+)"
+    r"(?::\s+['\"](?P<path>[^'\"]+)['\"])?"
+)
 TS_DIAGNOSTIC = re.compile(
     r"(?P<file>[^\r\n()]+)\((?P<line>\d+),(?P<column>\d+)\):\s+error\s+"
     r"(?P<code>TS\d+):\s*(?P<message>.+)"
@@ -60,7 +68,7 @@ TS_WRONG_ARG_COUNT = re.compile(
     r"Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<given>\d+)"
 )
 JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
-ENGINE_VERSION = "0.5.0"
+ENGINE_VERSION = "0.6.0"
 
 
 class BurhanAnalyzer:
@@ -224,6 +232,23 @@ class BurhanAnalyzer:
                 evidence,
                 uncertainty=0.18,
             ),), ("تحقق من إصدار المكتبة واسم API المتاح في هذا الإصدار.",)
+
+        import_name_match = PYTHON_IMPORT_NAME_ERROR.search(error_text)
+        if import_name_match:
+            name = import_name_match.group("name")
+            module = import_name_match.group("module") or "unknown"
+            evidence = (
+                Evidence("runtime", f"ImportError: لا يمكن استيراد الاسم '{name}' من الوحدة '{module}'", 2.3),
+                Evidence("traceback", f"آخر إطار مرتبط بالموقع {python_location or 'غير المحدد'}", 1.2),
+            )
+            return (self._make_hypothesis(
+                "missing_import_name",
+                name,
+                f"الاسم '{name}' غير موجود في الوحدة '{module}'",
+                python_location,
+                evidence,
+                uncertainty=0.2,
+            ),), ("هل الاسم موجود في الإصدار المثبت من الوحدة؟ تحقق من توثيق الوحدة.",)
 
         module_match = PYTHON_MODULE_ERROR.search(error_text)
         if module_match:
@@ -414,15 +439,16 @@ class BurhanAnalyzer:
         if os_error_match:
             errno_val = os_error_match.group("errno")
             message = os_error_match.group("message").strip()
-            path = os_error_match.group("path")
+            path = os_error_match.group("path") or "unknown"
+            path_detail = f": '{path}'" if path != "unknown" else ""
             evidence = (
-                Evidence("runtime", f"OSError [Errno {errno_val}] {message}: '{path}'", 2.1),
+                Evidence("runtime", f"OSError [Errno {errno_val}] {message}{path_detail}", 2.1),
                 Evidence("traceback", f"آخر إطار مرتبط بالموقع {python_location or 'غير المحدد'}", 1.2),
             )
             return (self._make_hypothesis(
                 "os_error",
                 path,
-                f"خطأ نظام تشغيل [Errno {errno_val}] {message}: '{path}'",
+                f"خطأ نظام تشغيل [Errno {errno_val}] {message}{path_detail}",
                 python_location,
                 evidence,
                 uncertainty=0.15,
@@ -625,6 +651,8 @@ class BurhanAnalyzer:
             risks.append("توقف مسح المشروع عند حد الموارد؛ قد يكون السياق ناقصًا")
         if hypothesis.kind == "insufficient_evidence":
             risks.append("السبب الجذري غير محدد بسبب نقص الأدلة")
+        elif hypothesis.kind == "unbound_local_variable":
+            risks.append("تأكد من إسناد قيمة للمتغير في جميع مسارات التنفيذ الممكنة قبل قراءته")
         elif hypothesis.suggested_replacement:
             risks.append("التعديل المقترح مبني على تشابه اسم ويحتاج تحققًا تنفيذيًا")
         elif hypothesis.kind in ("missing_key", "index_out_of_range"):
@@ -635,4 +663,6 @@ class BurhanAnalyzer:
             risks.append("قد تكون هناك حالات حافّة تؤدي إلى التكرار اللانهائي حتى بعد إضافة الحالة الأساسية")
         elif hypothesis.kind in ("file_not_found", "os_error"):
             risks.append("تأكد من معالجة الأخطاء الاستثنائية للملفات وتجنب المسارات المشفرة مسبقًا")
+        elif hypothesis.kind == "missing_import_name":
+            risks.append("قد يتطلب الإصلاح تحديث إصدار الحزمة أو تصحيح مسار الاستيراد")
         return tuple(risks)

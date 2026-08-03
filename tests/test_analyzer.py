@@ -37,7 +37,7 @@ NameError: name 'grete' is not defined
         self.assertTrue(any("NameError" in evidence.summary for evidence in result.primary.evidence))
         self.assertTrue(any(node.label == "greet" for node in result.state.nodes))
         self.assertTrue(result.case_id.startswith("case-"))
-        self.assertEqual(result.provenance.engine_version, "0.5.0")
+        self.assertEqual(result.provenance.engine_version, "0.6.0")
         self.assertTrue(result.provenance.input_fingerprint.startswith("sha256:"))
         self.assertTrue(result.residual_risks)
 
@@ -173,6 +173,48 @@ UnboundLocalError: local variable 'reslt' referenced before assignment
         self.assertEqual(result.primary.target, "reslt")
         self.assertIsNotNone(result.primary.suggested_replacement)
         self.assertEqual(result.primary.location, "calc.py:4")
+        self.assertTrue(result.questions)
+
+    def test_unbound_local_error_python312_message_diagnosed(self) -> None:
+        source = """\
+def compute(x):
+    if x > 0:
+        result = x * 2
+    return result
+"""
+        error = """\
+Traceback (most recent call last):
+  File "calc.py", line 4, in compute
+    return result
+UnboundLocalError: cannot access local variable 'result' where it is not associated with a value
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "calc.py").write_text(source, encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "unbound_local_variable")
+        self.assertEqual(result.primary.target, "result")
+        self.assertEqual(result.primary.location, "calc.py:4")
+        self.assertTrue(result.questions)
+
+    def test_import_error_cannot_import_name_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 1, in <module>
+    from os.path import nonexistent_function
+ImportError: cannot import name 'nonexistent_function' from 'os.path'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text(
+                "from os.path import nonexistent_function\n", encoding="utf-8"
+            )
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "missing_import_name")
+        self.assertEqual(result.primary.target, "nonexistent_function")
+        self.assertIn("os.path", result.primary.explanation)
         self.assertTrue(result.questions)
 
     def test_type_error_wrong_arg_count_diagnosed(self) -> None:
@@ -328,6 +370,38 @@ FileNotFoundError: [Errno 2] No such file or directory: '/data/config.json'
 
         self.assertEqual(result.primary.kind, "file_not_found")
         self.assertIn("/data/config.json", result.primary.target)
+        self.assertTrue(result.questions)
+
+    def test_file_not_found_error_windows_format_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in load
+    open('C:\\data\\config.json')
+FileNotFoundError: [WinError 2] The system cannot find the file specified: 'C:\\data\\config.json'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("open('C:\\\\data\\\\config.json')\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "file_not_found")
+        self.assertIn("config.json", result.primary.target)
+        self.assertTrue(result.questions)
+
+    def test_os_error_without_path_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 3, in connect
+    sock.connect(('localhost', 80))
+OSError: [Errno 111] Connection refused
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("import socket\nsock = socket.socket()\nsock.connect(('localhost', 80))\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "os_error")
+        self.assertIn("111", result.primary.explanation)
         self.assertTrue(result.questions)
 
     def test_typescript_arg_type_mismatch_ts2345(self) -> None:

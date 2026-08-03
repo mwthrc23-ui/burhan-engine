@@ -432,6 +432,51 @@ class ErrorKindClassificationTests(unittest.TestCase):
             self.assertEqual(len(matches), 1)
             self.assertEqual(matches[0].record.error_kind, "name_error")
 
+    def test_search_isolates_name_error_from_unbound_local_error(self) -> None:
+        name_row = {
+            "repo": "example/project",
+            "instance_id": "example__project-name",
+            "base_commit": "abc123",
+            "problem_statement": "NameError: name 'calculate' is not defined",
+            "patch": "diff --git a/x.py b/x.py\n",
+            "test_patch": "diff --git a/test_x.py b/test_x.py\n",
+            "FAIL_TO_PASS": json.dumps(["tests/test_x.py::test_foo"]),
+            "PASS_TO_PASS": json.dumps([]),
+            "version": "1.0",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+        unbound_row = {
+            "repo": "example/project",
+            "instance_id": "example__project-unbound",
+            "base_commit": "abc123",
+            "problem_statement": "UnboundLocalError: local variable 'calculate' referenced before assignment",
+            "patch": "diff --git a/y.py b/y.py\n",
+            "test_patch": "diff --git a/test_y.py b/test_y.py\n",
+            "FAIL_TO_PASS": json.dumps(["tests/test_y.py::test_bar"]),
+            "PASS_TO_PASS": json.dumps([]),
+            "version": "1.0",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+        name_record = SweBenchVerifiedSource.to_record(name_row)
+        unbound_record = SweBenchVerifiedSource.to_record(unbound_row)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SourceStore(Path(directory) / "store.sqlite3")
+            store.add(name_record)
+            store.add(unbound_record)
+
+            # searching for NameError should only return name_error kind
+            name_matches = store.search("NameError: name 'calculate' is not defined")
+            self.assertEqual(len(name_matches), 1)
+            self.assertEqual(name_matches[0].record.error_kind, "name_error")
+
+            # searching for UnboundLocalError should only return unbound_local_error kind
+            unbound_matches = store.search(
+                "UnboundLocalError: local variable 'calculate' referenced before assignment"
+            )
+            self.assertEqual(len(unbound_matches), 1)
+            self.assertEqual(unbound_matches[0].record.error_kind, "unbound_local_error")
+
     def test_attribute_error_search_still_works_with_new_schema(self) -> None:
         row = _swebench_attribute_error_row()
         record = SweBenchVerifiedSource.to_record(row)
