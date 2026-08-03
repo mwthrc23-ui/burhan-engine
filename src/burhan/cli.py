@@ -8,6 +8,7 @@ from typing import Sequence
 
 from .analyzer import ENGINE_VERSION, BurhanAnalyzer
 from .memory import MemoryQuery, RepairMemory
+from .model import CodeTreeNode
 from .patcher import (
     DEFAULT_DOCKER_IMAGE,
     PYTEST_DOCKER_IMAGE,
@@ -17,6 +18,7 @@ from .patcher import (
     ProofRunner,
     inject_test_evidence,
 )
+from .scanner import ProjectScanner, build_code_tree
 from .sources import (
     BugsInPySource,
     GitHubPullRequestSource,
@@ -159,6 +161,18 @@ def build_parser() -> argparse.ArgumentParser:
     source_error.add_argument("--error-file", type=Path)
     source_search.add_argument("--limit", type=int, default=5)
     source_search.add_argument("--json", action="store_true")
+    code_tree = subcommands.add_parser(
+        "code-tree",
+        help="اعرض شجرة الكود الهرمية للمشروع (ملفات ورموز)",
+    )
+    code_tree.add_argument("--project", type=Path, required=True, help="مسار المشروع")
+    code_tree.add_argument(
+        "--depth",
+        type=int,
+        default=0,
+        help="أقصى عمق للشجرة (0 = غير محدود)",
+    )
+    code_tree.add_argument("--json", action="store_true", help="أخرج الشجرة بصيغة JSON")
     return parser
 
 
@@ -191,6 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _source_import_github_pr(args)
     if args.command == "source-search":
         return _source_search(args)
+    if args.command == "code-tree":
+        return _code_tree(args)
     if args.command == "repair-proof":
         return _repair_proof(args)
     try:
@@ -616,6 +632,60 @@ def _read_error(error: str | None, error_file: Path | None) -> str:
     if error_file is None:
         raise ValueError("error input is required")
     return _read_limited_text(error_file, limit=1_000_000)
+
+
+def _code_tree(args: argparse.Namespace) -> int:
+    try:
+        snapshot = ProjectScanner().scan(args.project)
+        tree = build_code_tree(snapshot)
+    except (OSError, ValueError) as error:
+        print(f"خطأ: {error}", file=sys.stderr)
+        return 2
+    max_depth = args.depth if args.depth > 0 else None
+    if args.json:
+        print(json.dumps(_code_tree_to_dict(tree, max_depth, 0), ensure_ascii=False, indent=2))
+    else:
+        lines: list[str] = []
+        _render_code_tree(tree, prefix="", is_last=True, lines=lines, depth=0, max_depth=max_depth)
+        print("\n".join(lines))
+    return 0
+
+
+def _code_tree_to_dict(node: CodeTreeNode, max_depth: int | None, current: int) -> dict[str, object]:
+    result: dict[str, object] = {"name": node.name, "kind": node.kind}
+    if max_depth is None or current < max_depth:
+        result["children"] = [
+            _code_tree_to_dict(child, max_depth, current + 1)
+            for child in node.children
+        ]
+    else:
+        result["children"] = []
+    return result
+
+
+def _render_code_tree(
+    node: CodeTreeNode,
+    prefix: str,
+    is_last: bool,
+    lines: list[str],
+    depth: int,
+    max_depth: int | None,
+) -> None:
+    connector = "\\-- " if is_last else "|-- "
+    kind_tag = f" [{node.kind}]" if node.kind not in ("directory", "file") else ""
+    lines.append(f"{prefix}{connector}{_terminal_text(node.name)}{kind_tag}")
+    if max_depth is not None and depth >= max_depth:
+        return
+    child_prefix = prefix + ("    " if is_last else "|   ")
+    for index, child in enumerate(node.children):
+        _render_code_tree(
+            child,
+            child_prefix,
+            index == len(node.children) - 1,
+            lines,
+            depth + 1,
+            max_depth,
+        )
 
 
 if __name__ == "__main__":

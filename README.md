@@ -80,14 +80,47 @@ powershell -ExecutionPolicy Bypass -File scripts\try-burhan.ps1
 - المعاينة هي الوضع الافتراضي؛ الكتابة تحتاج الخيار الصريح `--apply`.
 - التوقف وطلب دليل إضافي بدل اختراع سبب غير مدعوم.
 - قراءة حالات `RepairEpisode` الموثقة مسبقًا من SQLite؛ إدخال ملفات JSON عبر CLI معطل مؤقتًا حتى يمكن إعادة إثباتها وربطها بالحالة والرقعة.
-- البحث عن حالات `AttributeError` مشابهة حسب الخاصية واللغة والإطار والاعتماديات.
+- البحث عن حالات `AttributeError` و`NameError` و`TypeError` و`ModuleNotFoundError` و`KeyError` مشابهة حسب النوع والرمز.
 - ربط نتائج ذاكرة الإصلاح بالتشخيص الجديد عبر `analyze --memory`.
-- جمع حالات حقيقية محدودة من SWE-bench Verified مع الوصف والرقعة ورقعة الاختبار و`FAIL_TO_PASS`.
+- جمع حالات حقيقية محدودة من SWE-bench Verified مع الوصف والرقعة ورقعة الاختبار و`FAIL_TO_PASS`، مع تصنيف تلقائي لأنواع الأخطاء (`attribute_error_candidate`، `name_error_candidate`، `module_error_candidate`، إلخ).
 - جمع حزمة BugsInPy المحددة مع commit والرقعة وأمر الاختبار، من دون تنفيذ أي كود وارد من المصدر.
-- جمع Pull Request محدد من GitHub مع الوصف والرقع كـ`source_record` خام غير مرقى.
+- جمع Pull Request محدد من GitHub مع الوصف والرقع كـ`source_record` خام غير مرقى، مع كشف تلقائي لنوع الخطأ من وصف PR.
 - فصل `source_records` الخام عن `repair_episodes` الموثقة، ومنع الحالة غير المصنفة من الظهور كإصلاح موثوق.
 - حفظ تغيرات المصدر كسجل نسخ append-only يعتمد على SHA-256 بدل استبدال الدليل السابق بصمت.
 - استرجاع رقعة واختبار مشابهين عبر `source-search` مع وسم صريح بأنها مرشحة لم تُختبر محليًا.
+- **شجرة الكود** `code-tree`: أمر جديد يعرض هيكل المشروع الهرمي (مجلدات وملفات ورموز) نصًا أو JSON.
+
+## شجرة الكود
+
+يعرض الأمر `code-tree` البنية الهرمية للمشروع: المجلدات والملفات والرموز (الدوال والأصناف) المستخرجة من الكود:
+
+```bash
+burhan code-tree --project PATH_TO_PROJECT
+```
+
+مثال على الإخراج:
+
+```
+\-- my-project [directory]
+    |-- src [directory]
+    |   \-- app.py
+    |       |-- MyClass [class]
+    |       \-- helper [function]
+    \-- tests [directory]
+        \-- test_app.py
+```
+
+لتحديد أقصى عمق للشجرة:
+
+```bash
+burhan code-tree --project PATH_TO_PROJECT --depth 2
+```
+
+لإخراج JSON قابل للمعالجة:
+
+```bash
+burhan code-tree --project PATH_TO_PROJECT --json
+```
 
 ## ذاكرة الإصلاح
 

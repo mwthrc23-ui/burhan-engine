@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .model import CodeTreeNode
 
 
 SUPPORTED_EXTENSIONS = frozenset(
@@ -461,4 +465,124 @@ def _walk_ts_js(node: Any, out: list[str]) -> None:
             out.append(name_node.text.decode("utf-8", errors="replace"))
     for child in node.children:
         _walk_ts_js(child, out)
+
+
+# ---------------------------------------------------------------------------
+# Code tree builder
+# ---------------------------------------------------------------------------
+
+_JS_SYMBOL_RE = re.compile(
+    r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)"
+)
+
+
+def _symbol_kind_from_ast(node: ast.AST) -> tuple[str, str] | None:
+    """Return (name, kind) for a top-level AST definition node, or None."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return node.name, "function"
+    if isinstance(node, ast.ClassDef):
+        return node.name, "class"
+    return None
+
+
+def _extract_file_children(source_file: SourceFile) -> tuple[CodeTreeNode, ...]:
+    """Return symbol nodes for a source file using AST for Python, regex for JS/TS."""
+    path = source_file.relative_path
+    children: list[CodeTreeNode] = []
+
+    if path.endswith((".py", ".pyi")):
+        try:
+            tree = ast.parse(source_file.content)
+        except SyntaxError:
+            return ()
+        for node in ast.walk(tree):
+            result = _symbol_kind_from_ast(node)
+            if result is not None:
+                name, kind = result
+                children.append(CodeTreeNode(name=name, kind=kind))
+        return tuple(dict.fromkeys(c.name for c in children) and children or children)
+
+    if path.endswith((".ts", ".tsx", ".js", ".jsx")):
+        seen: set[str] = set()
+        for match in _JS_SYMBOL_RE.finditer(source_file.content):
+            name = match.group(1)
+            if name not in seen:
+                seen.add(name)
+                keyword = match.group(0).split()[0]
+                kind = "class" if keyword == "class" else "function"
+                children.append(CodeTreeNode(name=name, kind=kind))
+        return tuple(children)
+
+    return ()
+
+
+def build_code_tree(snapshot: ProjectSnapshot) -> CodeTreeNode:
+    """Build a hierarchical :class:`CodeTreeNode` tree from *snapshot*.
+
+    The tree has the form::
+
+        <project root>          (directory)
+        ├── src/                (directory)
+        │   └── app.py          (file)
+        │       ├── MyClass     (class)
+        │       └── helper      (function)
+        └── tests/              (directory)
+            └── test_app.py     (file)
+
+    Directories are inferred from the relative paths of the scanned files.
+    Only files present in the snapshot are included (i.e. secret or oversized
+    files that were excluded from the scan will not appear).
+    """
+    # Build a nested dict tree: {name: {"_files": [...], "subdirs": {name: ...}}}
+    # We use a simpler approach: build a dict of path -> CodeTreeNode bottom-up.
+
+    # Collect all unique directory paths and file paths
+    dir_files: dict[str, list[CodeTreeNode]] = {}  # dir_path -> list of file nodes
+
+    for source in snapshot.files:
+        parts = source.relative_path.split("/")
+        file_name = parts[-1]
+        dir_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
+        file_node = CodeTreeNode(
+            name=file_name,
+            kind="file",
+            children=_extract_file_children(source),
+        )
+        dir_files.setdefault(dir_path, []).append(file_node)
+
+    # Collect all unique directory paths (including intermediate directories)
+    all_dirs: set[str] = set(dir_files.keys())
+    for path in list(all_dirs):
+        parts = path.split("/") if path else []
+        for i in range(len(parts)):
+            all_dirs.add("/".join(parts[:i]))
+
+    # Build nodes bottom-up: for each directory, collect its direct children
+    # (subdirectories and files)
+    def _build_dir(dir_path: str) -> CodeTreeNode:
+        dir_name = dir_path.split("/")[-1] if dir_path else snapshot.root.name
+
+        # Find immediate subdirectories
+        depth = len(dir_path.split("/")) if dir_path else 0
+        subdirs: list[CodeTreeNode] = []
+        seen_subdirs: set[str] = set()
+        for other in sorted(all_dirs):
+            if not other:
+                continue
+            other_parts = other.split("/")
+            if len(other_parts) == depth + 1 and (
+                (dir_path and other.startswith(dir_path + "/"))
+                or (not dir_path and "/" not in other)
+            ):
+                subdir_name = other_parts[-1]
+                if subdir_name not in seen_subdirs:
+                    seen_subdirs.add(subdir_name)
+                    subdirs.append(_build_dir(other))
+
+        # Files directly in this directory
+        files = sorted(dir_files.get(dir_path, []), key=lambda n: n.name)
+        children = tuple(sorted(subdirs, key=lambda n: n.name) + files)
+        return CodeTreeNode(name=dir_name, kind="directory", children=children)
+
+    return _build_dir("")
 

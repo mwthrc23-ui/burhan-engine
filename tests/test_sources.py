@@ -359,5 +359,118 @@ class SafeJsonClientTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["row"]["instance_id"], "case-1")
 
 
+class ErrorKindClassificationTests(unittest.TestCase):
+    def _make_swebench_row(self, problem_statement: str, fail_to_pass: list[str] | None = None) -> dict[str, object]:
+        return {
+            "repo": "example/project",
+            "instance_id": "example__project-1",
+            "base_commit": "abc123",
+            "problem_statement": problem_statement,
+            "patch": "diff --git a/x.py b/x.py\n",
+            "test_patch": "diff --git a/test_x.py b/test_x.py\n",
+            "FAIL_TO_PASS": json.dumps(fail_to_pass or ["tests/test_x.py::test_foo"]),
+            "PASS_TO_PASS": json.dumps([]),
+            "version": "1.0",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+
+    def test_attribute_error_is_classified_correctly(self) -> None:
+        row = self._make_swebench_row(
+            "AttributeError: 'NoneType' object has no attribute 'read'"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        self.assertEqual(record.classification_status, "attribute_error_candidate")
+        self.assertEqual(record.error_kind, "attribute_error")
+        self.assertEqual(record.attribute_name, "read")
+
+    def test_name_error_is_classified_correctly(self) -> None:
+        row = self._make_swebench_row(
+            "NameError: name 'my_func' is not defined when calling helper"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        self.assertEqual(record.classification_status, "name_error_candidate")
+        self.assertEqual(record.error_kind, "name_error")
+        self.assertEqual(record.attribute_name, "my_func")
+
+    def test_module_error_is_classified_correctly(self) -> None:
+        row = self._make_swebench_row(
+            "ModuleNotFoundError: No module named 'pandas'"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        self.assertEqual(record.classification_status, "module_error_candidate")
+        self.assertEqual(record.error_kind, "module_error")
+        self.assertEqual(record.attribute_name, "pandas")
+
+    def test_unrecognized_error_remains_unclassified(self) -> None:
+        row = self._make_swebench_row(
+            "Some unexpected issue happened in the code"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        self.assertEqual(record.classification_status, "unclassified")
+        self.assertEqual(record.error_kind, "unknown")
+
+    def test_error_kind_survives_round_trip_via_dict(self) -> None:
+        row = self._make_swebench_row(
+            "NameError: name 'calculate' is not defined"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        restored = SourceRecord.from_dict(record.to_dict())
+        self.assertEqual(restored.error_kind, "name_error")
+        self.assertEqual(restored.classification_status, "name_error_candidate")
+
+    def test_name_error_candidate_is_searchable_by_symbol(self) -> None:
+        row = self._make_swebench_row(
+            "NameError: name 'calculate' is not defined"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SourceStore(Path(directory) / "store.sqlite3")
+            store.add(record)
+
+            matches = store.search("NameError: name 'calculate' is not defined")
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].record.error_kind, "name_error")
+
+    def test_attribute_error_search_still_works_with_new_schema(self) -> None:
+        row = _swebench_attribute_error_row()
+        record = SweBenchVerifiedSource.to_record(row)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SourceStore(Path(directory) / "store.sqlite3")
+            store.add(record)
+
+            matches = store.search(
+                "AttributeError: 'NoneType' object has no attribute 'to'"
+            )
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].record.error_kind, "attribute_error")
+
+    def test_github_pr_detects_name_error(self) -> None:
+        from burhan.sources import GitHubPullRequestSource
+
+        record = GitHubPullRequestSource.to_record(
+            repository="example/project",
+            pull_number="7",
+            issue={
+                "title": "NameError in helper",
+                "body": "NameError: name 'build_index' is not defined",
+                "html_url": "https://github.com/example/project/pull/7",
+            },
+            pull_request={
+                "html_url": "https://github.com/example/project/pull/7",
+                "merge_commit_sha": "def456",
+            },
+            files=[
+                {
+                    "filename": "src/helper.py",
+                    "patch": "@@ -1 +1 @@\n-build()\n+build_index()",
+                },
+            ],
+        )
+        self.assertEqual(record.error_kind, "name_error")
+        self.assertEqual(record.attribute_name, "build_index")
+
+
 if __name__ == "__main__":
     unittest.main()

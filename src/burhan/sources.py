@@ -35,6 +35,34 @@ _MAX_DESCRIPTION_BYTES = 2_000_000
 _MAX_PATCH_BYTES = 5_000_000
 _MAX_TEST_COMMAND_BYTES = 100_000
 
+# ---------------------------------------------------------------------------
+# Error-type patterns used for source record classification
+# ---------------------------------------------------------------------------
+
+_NAME_ERROR_PATTERN = re.compile(
+    r"NameError:\s+name\s+['\"](?P<name>[^'\"]+)['\"]\s+is not defined"
+)
+_TYPE_ERROR_PATTERN = re.compile(
+    r"TypeError:\s+(?P<message>[^\n]+)"
+)
+_MODULE_ERROR_PATTERN = re.compile(
+    r"(?:ModuleNotFoundError|ImportError):\s+(?:No module named\s+)?['\"]?(?P<name>[A-Za-z0-9_.]+)"
+)
+_KEY_ERROR_PATTERN = re.compile(
+    r"KeyError:\s+'?(?P<name>[^'\n]+)'?"
+)
+
+# Map (pattern, group, classification_status, error_kind)
+_ERROR_CLASSIFIERS: tuple[
+    tuple[re.Pattern[str], str, str, str], ...
+] = (
+    (ATTRIBUTE_ERROR, "attribute",   "attribute_error_candidate", "attribute_error"),
+    (_NAME_ERROR_PATTERN,   "name",  "name_error_candidate",      "name_error"),
+    (_TYPE_ERROR_PATTERN,   "message", "type_error_candidate",    "type_error"),
+    (_MODULE_ERROR_PATTERN, "name",  "module_error_candidate",    "module_error"),
+    (_KEY_ERROR_PATTERN,    "name",  "key_error_candidate",       "key_error"),
+)
+
 
 class _ValidatedRedirectHandler(HTTPRedirectHandler):
     max_redirections = 3
@@ -130,6 +158,7 @@ class SourceRecord:
     test_command: str
     provenance: Mapping[str, str | None]
     payload_sha256: str
+    error_kind: str = "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -145,6 +174,7 @@ class SourceRecord:
             "test_command": self.test_command,
             "provenance": dict(self.provenance),
             "payload_sha256": self.payload_sha256,
+            "error_kind": self.error_kind,
         }
 
     @classmethod
@@ -167,6 +197,7 @@ class SourceRecord:
                 {str(key): _optional_text(item) for key, item in provenance.items()}
             ),
             payload_sha256=_required_text(value, "payload_sha256"),
+            error_kind=_optional_text(value.get("error_kind")) or "unknown",
         )
 
 
@@ -199,8 +230,8 @@ class SourceStore:
                 """
                 INSERT INTO source_record_versions (
                     source_id, payload_sha256, classification_status,
-                    attribute_name, payload_json
-                ) VALUES (?, ?, ?, ?, ?)
+                    attribute_name, error_kind, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id, payload_sha256) DO NOTHING
                 """,
                 (
@@ -208,6 +239,7 @@ class SourceStore:
                     record.payload_sha256,
                     record.classification_status,
                     record.attribute_name,
+                    record.error_kind,
                     payload,
                 ),
             )
@@ -230,10 +262,25 @@ class SourceStore:
     def search(self, error_text: str, *, limit: int = 5) -> tuple[SourceMatch, ...]:
         if limit <= 0 or limit > 50:
             raise ValueError("search limit must be between 1 and 50")
-        match = ATTRIBUTE_ERROR.search(error_text)
-        if not match:
+
+        # Identify the error kind and primary token from the error text
+        matched_kind: str | None = None
+        matched_token: str | None = None
+        matched_status: str | None = None
+        for pattern, group, status, kind in _ERROR_CLASSIFIERS:
+            m = pattern.search(error_text)
+            if m:
+                try:
+                    matched_token = m.group(group)
+                except IndexError:
+                    matched_token = None
+                matched_kind = kind
+                matched_status = status
+                break
+
+        if matched_status is None or matched_token is None:
             return ()
-        attribute = match.group("attribute")
+
         with self._session() as connection:
             indexed_rows = connection.execute(
                 """
@@ -242,24 +289,24 @@ class SourceStore:
                 WHERE rowid IN (
                     SELECT MAX(rowid) FROM source_record_versions GROUP BY source_id
                 )
-                AND classification_status = 'attribute_error_candidate'
+                AND classification_status = ?
                 ORDER BY CASE WHEN attribute_name = ? THEN 0 ELSE 1 END, source_id
                 """,
-                (attribute,),
+                (matched_status, matched_token),
             ).fetchall()
             ranked: list[tuple[float, str, str, tuple[str, ...]]] = []
-            for source_id, payload_sha256, candidate_attribute in indexed_rows:
-                exact = candidate_attribute == attribute
+            for source_id, payload_sha256, candidate_token in indexed_rows:
+                exact = candidate_token == matched_token
                 similarity = difflib.SequenceMatcher(
-                    None, candidate_attribute or "", attribute
+                    None, candidate_token or "", matched_token
                 ).ratio()
                 if not exact and similarity < 0.65:
                     continue
                 score = 0.9 if exact else round(0.55 + similarity * 0.2, 4)
                 reasons = (
-                    ("same_attribute", "source_attested_dataset_case")
+                    (f"same_{matched_kind}_token", "source_attested_dataset_case")
                     if exact
-                    else ("similar_attribute", "source_attested_dataset_case")
+                    else (f"similar_{matched_kind}_token", "source_attested_dataset_case")
                 )
                 ranked.append((score, source_id, payload_sha256, reasons))
             ranked.sort(key=lambda item: (-item[0], item[1]))
@@ -299,7 +346,7 @@ class SourceStore:
             connection.execute(
                 """
                 INSERT INTO burhan_metadata(key, value)
-                VALUES ('source_schema_version', '2')
+                VALUES ('source_schema_version', '3')
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """
             )
@@ -310,16 +357,30 @@ class SourceStore:
                     payload_sha256 TEXT NOT NULL,
                     classification_status TEXT NOT NULL,
                     attribute_name TEXT,
+                    error_kind TEXT NOT NULL DEFAULT 'unknown',
                     payload_json TEXT NOT NULL,
                     imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (source_id, payload_sha256)
                 )
                 """
             )
+            # Migrate existing tables that predate the error_kind column.
+            try:
+                connection.execute(
+                    "ALTER TABLE source_record_versions ADD COLUMN error_kind TEXT NOT NULL DEFAULT 'unknown'"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_source_record_version_lookup
                 ON source_record_versions(classification_status, attribute_name, source_id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_source_record_error_kind
+                ON source_record_versions(error_kind, source_id)
                 """
             )
             self._copy_legacy_records(connection)
@@ -406,14 +467,26 @@ class SweBenchVerifiedSource:
         solution_patch = _required_raw_text(row, "patch")
         test_patch = _required_raw_text(row, "test_patch")
         fail_to_pass = _json_text_tuple(row.get("FAIL_TO_PASS"), "FAIL_TO_PASS")
-        error_match = ATTRIBUTE_ERROR.search(description)
-        attribute = error_match.group("attribute") if error_match else None
         framework_is_pytest = any("::" in item for item in fail_to_pass)
-        classification = (
-            "attribute_error_candidate"
-            if error_match and framework_is_pytest
-            else "unclassified"
-        )
+
+        # Try each error classifier in priority order
+        error_match: re.Match[str] | None = None
+        error_token: str | None = None
+        classification = "unclassified"
+        error_kind = "unknown"
+        for pattern, group, status, kind in _ERROR_CLASSIFIERS:
+            m = pattern.search(description)
+            if m and framework_is_pytest:
+                try:
+                    token = m.group(group)
+                except IndexError:
+                    token = None
+                error_match = m
+                error_token = token
+                classification = status
+                error_kind = kind
+                break
+
         canonical = json.dumps(dict(row), ensure_ascii=False, sort_keys=True)
         provenance = MappingProxyType(
             {
@@ -425,6 +498,13 @@ class SweBenchVerifiedSource:
                 "dataset_license_spdx": "MIT",
                 "upstream_license_spdx": None,
             }
+        )
+        # For backward compat, attribute_name holds the primary error token
+        # regardless of error type (attribute name, undefined name, etc.)
+        attribute = (
+            error_match.group("attribute")
+            if error_match and error_kind == "attribute_error"
+            else error_token
         )
         return SourceRecord(
             source_id=f"swebench:{instance_id}",
@@ -439,6 +519,7 @@ class SweBenchVerifiedSource:
             test_command="\n".join(fail_to_pass),
             provenance=provenance,
             payload_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            error_kind=error_kind,
         )
 
     @staticmethod
@@ -613,7 +694,30 @@ class GitHubPullRequestSource:
         title = _optional_text(issue.get("title")) or f"GitHub PR {pull_number}"
         body = _optional_text(issue.get("body")) or ""
         description = f"{title}\n\n{body}".strip()
-        error_match = ATTRIBUTE_ERROR.search(description)
+
+        # Try each error classifier in priority order
+        error_match_obj: re.Match[str] | None = None
+        error_token: str | None = None
+        error_kind = "unknown"
+        for pattern, group, _status, kind in _ERROR_CLASSIFIERS:
+            m = pattern.search(description)
+            if m:
+                try:
+                    token = m.group(group)
+                except IndexError:
+                    token = None
+                error_match_obj = m
+                error_token = token
+                error_kind = kind
+                break
+
+        # For attribute_error, keep the original "attribute" group; otherwise use error_token
+        attribute = (
+            error_match_obj.group("attribute")
+            if error_match_obj and error_kind == "attribute_error"
+            else error_token
+        )
+
         solution_patch = _github_files_patch(files, include_tests=True)
         test_patch = _github_files_patch(files, include_tests=False)
         canonical = json.dumps(
@@ -647,13 +751,14 @@ class GitHubPullRequestSource:
             problem_description=description,
             root_cause=None,
             root_cause_status="unknown",
-            error_text=error_match.group(0) if error_match else None,
-            attribute_name=error_match.group("attribute") if error_match else None,
+            error_text=error_match_obj.group(0) if error_match_obj else None,
+            attribute_name=attribute,
             solution_patch=solution_patch,
             test_patch=test_patch,
             test_command="",
             provenance=provenance,
             payload_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            error_kind=error_kind,
         )
 
 

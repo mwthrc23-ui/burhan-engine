@@ -125,6 +125,30 @@ class BurhanState:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeTreeNode:
+    """A node in the hierarchical code tree of a project.
+
+    kind values:
+    - "directory" : a directory entry
+    - "file"      : a source file
+    - "class"     : a class definition
+    - "function"  : a function or method definition
+    - "variable"  : a module-level variable or constant
+    """
+
+    name: str
+    kind: str
+    children: tuple["CodeTreeNode", ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "children": [child.to_dict() for child in self.children],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisResult:
     state: BurhanState
     hypotheses: tuple[Hypothesis, ...]
