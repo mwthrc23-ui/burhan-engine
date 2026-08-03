@@ -26,7 +26,7 @@ class CliTests(unittest.TestCase):
             exit_code = main(["--version"])
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("burhan 0.5.0", output.getvalue())
+        self.assertIn("burhan 0.6.0", output.getvalue())
 
     def test_analyze_command_outputs_machine_readable_bir_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
