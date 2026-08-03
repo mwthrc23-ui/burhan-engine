@@ -125,6 +125,30 @@ class BurhanState:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeTreeNode:
+    """A node in the hierarchical code tree of a project.
+
+    kind values:
+    - "directory" : a directory entry
+    - "file"      : a source file
+    - "class"     : a class definition
+    - "function"  : a function or method definition
+    - "variable"  : a module-level variable or constant
+    """
+
+    name: str
+    kind: str
+    children: tuple["CodeTreeNode", ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "children": [child.to_dict() for child in self.children],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisResult:
     state: BurhanState
     hypotheses: tuple[Hypothesis, ...]
@@ -133,6 +157,7 @@ class AnalysisResult:
     provenance: Provenance
     residual_risks: tuple[str, ...] = ()
     questions: tuple[str, ...] = ()
+    code_tree: "CodeTreeNode | None" = None
 
     @property
     def primary(self) -> Hypothesis:
@@ -145,7 +170,7 @@ class AnalysisResult:
         return self.primary.confidence
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "case_id": self.case_id,
             "state": self.state.to_dict(),
             "hypotheses": [hypothesis.to_dict() for hypothesis in self.hypotheses],
@@ -155,3 +180,6 @@ class AnalysisResult:
             "residual_risks": list(self.residual_risks),
             "provenance": self.provenance.to_dict(),
         }
+        if self.code_tree is not None:
+            result["code_tree"] = self.code_tree.to_dict()
+        return result

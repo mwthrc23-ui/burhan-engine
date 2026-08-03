@@ -112,8 +112,8 @@ class ProofResult:
 
 class PatchEngine:
     def repair(self, project: Path, hypothesis: Hypothesis, *, apply: bool = False) -> PatchResult:
-        if hypothesis.kind != "undefined_name" or not hypothesis.suggested_replacement:
-            raise ValueError("this repair engine currently supports undefined names with a known replacement")
+        if hypothesis.kind not in ("undefined_name", "unbound_local_variable") or not hypothesis.suggested_replacement:
+            raise ValueError("this repair engine currently supports undefined/unbound names with a known replacement")
         if not hypothesis.location:
             raise ValueError("hypothesis has no source location")
 

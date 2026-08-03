@@ -520,5 +520,71 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
 
 
+class CodeTreeCliTests(unittest.TestCase):
+    def test_code_tree_text_output_contains_file_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("def run(): pass\n", encoding="utf-8")
+            (root / "utils.py").write_text("X = 1\n", encoding="utf-8")
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["code-tree", "--project", str(root)])
+
+        self.assertEqual(exit_code, 0)
+        text = output.getvalue()
+        self.assertIn("app.py", text)
+        self.assertIn("utils.py", text)
+
+    def test_code_tree_json_output_is_valid_json_with_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text(
+                "class Handler:\n    pass\ndef main(): pass\n",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(["code-tree", "--project", str(root), "--json"])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["kind"], "directory")
+        self.assertIn("children", payload)
+        # Find the file node
+        file_node = next(c for c in payload["children"] if c["name"] == "app.py")
+        symbol_names = [c["name"] for c in file_node["children"]]
+        self.assertIn("Handler", symbol_names)
+        self.assertIn("main", symbol_names)
+
+    def test_code_tree_respects_depth_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = root / "src"
+            src.mkdir()
+            (src / "deep.py").write_text("def deep(): pass\n", encoding="utf-8")
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    ["code-tree", "--project", str(root), "--depth", "1", "--json"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        # At depth 1 the src directory node is present but its children are empty
+        src_node = next(c for c in payload["children"] if c["name"] == "src")
+        self.assertEqual(src_node["children"], [])
+
+    def test_code_tree_returns_error_for_nonexistent_project(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = main(
+                ["code-tree", "--project", "/nonexistent/path/xyz", "--json"]
+            )
+        self.assertEqual(exit_code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

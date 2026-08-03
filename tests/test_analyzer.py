@@ -147,6 +147,290 @@ AttributeError: 'ApiClient' object has no attribute 'send'
         self.assertLess(result.confidence, 0.5)
         self.assertTrue(result.questions)
 
+    # ------------------------------------------------------------------
+    # New error types
+    # ------------------------------------------------------------------
+
+    def test_unbound_local_error_diagnosed_with_close_match(self) -> None:
+        source = """\
+def compute(x):
+    if x > 0:
+        result = x * 2
+    return reslt
+"""
+        error = """\
+Traceback (most recent call last):
+  File "calc.py", line 4, in compute
+    return reslt
+UnboundLocalError: local variable 'reslt' referenced before assignment
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "calc.py").write_text(source, encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "unbound_local_variable")
+        self.assertEqual(result.primary.target, "reslt")
+        self.assertIsNotNone(result.primary.suggested_replacement)
+        self.assertEqual(result.primary.location, "calc.py:4")
+        self.assertTrue(result.questions)
+
+    def test_type_error_wrong_arg_count_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 3, in <module>
+    greet("Alice", "extra")
+TypeError: greet() takes 1 positional argument but 2 were given
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("def greet(name): pass\ngreet('Alice', 'extra')\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "wrong_argument_count")
+        self.assertEqual(result.primary.target, "greet")
+        self.assertIn("greet", result.primary.explanation)
+        self.assertIn("1", result.primary.explanation)
+        self.assertTrue(result.questions)
+
+    def test_type_error_not_callable_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    result = count(10)
+TypeError: 'int' object is not callable
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("count = 5\nresult = count(10)\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "not_callable")
+        self.assertIn("int", result.primary.explanation)
+        self.assertTrue(result.questions)
+
+    def test_type_error_bad_operand_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    result = "hello" + 5
+TypeError: unsupported operand type(s) for +: 'str' and 'int'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text('result = "hello" + 5\n', encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "unsupported_operand")
+        self.assertIn("str", result.primary.explanation)
+        self.assertIn("int", result.primary.explanation)
+        self.assertTrue(result.questions)
+
+    def test_generic_type_error_diagnosed(self) -> None:
+        error = "TypeError: must be str, not int"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "type_error")
+        self.assertIn("str", result.primary.explanation)
+
+    def test_value_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    x = int("hello")
+ValueError: invalid literal for int() with base 10: 'hello'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("x = int('hello')\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "value_error")
+        self.assertIn("hello", result.primary.explanation)
+        self.assertTrue(result.questions)
+
+    def test_index_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    x = items[10]
+IndexError: list index out of range
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("items = [1, 2]\nx = items[10]\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "index_out_of_range")
+        self.assertTrue(result.questions)
+
+    def test_key_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    val = data['missing_key']
+KeyError: 'missing_key'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("data = {}\nval = data['missing_key']\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "missing_key")
+        self.assertIn("missing_key", result.primary.target)
+        self.assertTrue(result.questions)
+
+    def test_zero_division_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in <module>
+    result = 10 / 0
+ZeroDivisionError: division by zero
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("result = 10 / 0\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "zero_division")
+        self.assertTrue(result.residual_risks)
+
+    def test_recursion_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in recurse
+    return recurse(n - 1)
+  ...
+RecursionError: maximum recursion depth exceeded
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("def recurse(n):\n    return recurse(n - 1)\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "infinite_recursion")
+        self.assertTrue(result.questions)
+
+    def test_file_not_found_error_diagnosed(self) -> None:
+        error = """\
+Traceback (most recent call last):
+  File "app.py", line 2, in load
+    open('/data/config.json')
+FileNotFoundError: [Errno 2] No such file or directory: '/data/config.json'
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("open('/data/config.json')\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(result.primary.kind, "file_not_found")
+        self.assertIn("/data/config.json", result.primary.target)
+        self.assertTrue(result.questions)
+
+    def test_typescript_arg_type_mismatch_ts2345(self) -> None:
+        error = (
+            "src/app.ts(5,10): error TS2345: "
+            "Argument of type 'string' is not assignable to parameter of type 'number'."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = root / "src"
+            src.mkdir()
+            (src / "app.ts").write_text("function add(a: number) { return a + 1; }\nadd('five');\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح خطأ TypeScript", error)
+
+        self.assertEqual(result.primary.kind, "argument_type_mismatch")
+        self.assertIn("string", result.primary.explanation)
+        self.assertIn("number", result.primary.explanation)
+        self.assertEqual(result.primary.location, "src/app.ts:5:10")
+        self.assertTrue(result.questions)
+
+    def test_typescript_wrong_arg_count_ts2554(self) -> None:
+        error = (
+            "src/app.ts(3,1): error TS2554: Expected 2 arguments, but got 3."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = root / "src"
+            src.mkdir()
+            (src / "app.ts").write_text("function add(a: number, b: number) { return a + b; }\nadd(1,2,3);\n", encoding="utf-8")
+            result = BurhanAnalyzer().analyze(root, "أصلح خطأ TypeScript", error)
+
+        self.assertEqual(result.primary.kind, "wrong_argument_count")
+        self.assertIn("2", result.primary.explanation)
+        self.assertIn("3", result.primary.explanation)
+        self.assertEqual(result.primary.location, "src/app.ts:3:1")
+        self.assertTrue(result.questions)
+
+    def test_unbound_local_variable_repair_renames_like_name_error(self) -> None:
+        source = """\
+def compute(x):
+    if x > 0:
+        result = x * 2
+    return reslt
+"""
+        error = """\
+Traceback (most recent call last):
+  File "calc.py", line 4, in compute
+    return reslt
+UnboundLocalError: local variable 'reslt' referenced before assignment
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "calc.py").write_text(source, encoding="utf-8")
+            analysis = BurhanAnalyzer().analyze(root, "أصلح الخطأ", error)
+
+        self.assertEqual(analysis.primary.kind, "unbound_local_variable")
+        self.assertIsNotNone(analysis.primary.suggested_replacement)
+
+    def test_analysis_result_includes_code_tree(self) -> None:
+        source = """\
+class Processor:
+    def run(self): pass
+    def stop(self): pass
+
+def main(): pass
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "proc.py").write_text(source, encoding="utf-8")
+
+            result = BurhanAnalyzer().analyze(root, "افهم المشكلة", "something unusual happened")
+
+        self.assertIsNotNone(result.code_tree)
+        assert result.code_tree is not None
+        # Root is a directory
+        self.assertEqual(result.code_tree.kind, "directory")
+        # proc.py is a child of root
+        file_names = {node.name for node in result.code_tree.children}
+        self.assertIn("proc.py", file_names)
+        file_node = next(n for n in result.code_tree.children if n.name == "proc.py")
+        top_names = {n.name for n in file_node.children}
+        self.assertIn("Processor", top_names)
+        self.assertIn("main", top_names)
+        # Methods are nested inside the class, not at file level
+        self.assertNotIn("run", top_names)
+        class_node = next(n for n in file_node.children if n.name == "Processor")
+        method_names = {m.name for m in class_node.children}
+        self.assertIn("run", method_names)
+        self.assertIn("stop", method_names)
+
+    def test_analysis_result_to_dict_includes_code_tree(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("def run(): pass\n", encoding="utf-8")
+
+            result = BurhanAnalyzer().analyze(root, "افهم المشكلة", "something unusual happened")
+
+        payload = json.dumps(result.to_dict(), ensure_ascii=False)
+        self.assertIn("code_tree", payload)
+        self.assertIn("app.py", payload)
+
 
 if __name__ == "__main__":
     unittest.main()
