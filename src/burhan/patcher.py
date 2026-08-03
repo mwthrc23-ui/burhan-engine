@@ -533,7 +533,7 @@ class ProofRunner:
         if hypothesis.kind == "unbound_local_variable":
             name_error = re.search(
                 rf"UnboundLocalError:\s+(?:cannot access local variable\s+|local variable\s+)"
-                rf"['\"]?{target}['\"]?",
+                rf"['\"]{target}['\"]",
                 combined,
             )
         else:

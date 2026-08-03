@@ -7,7 +7,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping
@@ -51,6 +51,10 @@ _TYPE_ERROR_PATTERN = re.compile(
 _MODULE_ERROR_PATTERN = re.compile(
     r"(?:ModuleNotFoundError|ImportError):\s+(?:No module named\s+)?['\"]?(?P<name>[A-Za-z0-9_.]+)"
 )
+_IMPORT_NAME_PATTERN = re.compile(
+    r"ImportError:\s+cannot import name\s+['\"](?P<name>[^'\"]+)['\"]"
+    r"(?:\s+from\s+['\"](?P<module>[^'\"]+)['\"])?"
+)
 _KEY_ERROR_PATTERN = re.compile(
     r"KeyError:\s+'?(?P<name>[^'\n]+)'?"
 )
@@ -67,7 +71,12 @@ _RECURSION_PATTERN = re.compile(
     r"RecursionError:\s+(?P<message>[^\n]+)"
 )
 _FILE_NOT_FOUND_PATTERN = re.compile(
-    r"FileNotFoundError:\s+\[Errno 2\]\s+No such file or directory:\s+'(?P<path>[^']+)'"
+    r"FileNotFoundError:\s+(?:\[(?:Errno|WinError)\s+\d+\]\s+[^:]+:\s+)?"
+    r"['\"](?P<path>[^'\"]+)['\"]"
+)
+_OS_ERROR_PATTERN = re.compile(
+    r"(?:OSError|IOError):\s+\[(?:Errno|WinError)\s+(?P<errno>\d+)\]\s+"
+    r"(?P<message>[^:\n]+)(?::\s+['\"](?P<path>[^'\"]+)['\"])?"
 )
 
 # Map (pattern, group, classification_status, error_kind)
@@ -78,6 +87,7 @@ _ERROR_CLASSIFIERS: tuple[
     (_NAME_ERROR_PATTERN,     "name",      "name_error_candidate",        "name_error"),
     (_UNBOUND_ERROR_PATTERN,  "name",      "name_error_candidate",        "unbound_local_error"),
     (_TYPE_ERROR_PATTERN,     "message",   "type_error_candidate",        "type_error"),
+    (_IMPORT_NAME_PATTERN,    "name",      "module_error_candidate",      "missing_import_name"),
     (_MODULE_ERROR_PATTERN,   "name",      "module_error_candidate",      "module_error"),
     (_KEY_ERROR_PATTERN,      "name",      "key_error_candidate",         "key_error"),
     (_VALUE_ERROR_PATTERN,    "message",   "value_error_candidate",       "value_error"),
@@ -85,7 +95,24 @@ _ERROR_CLASSIFIERS: tuple[
     (_ZERO_DIV_PATTERN,       "message",   "zero_div_candidate",          "zero_division_error"),
     (_RECURSION_PATTERN,      "message",   "recursion_candidate",         "recursion_error"),
     (_FILE_NOT_FOUND_PATTERN, "path",      "file_not_found_candidate",    "file_not_found_error"),
+    (_OS_ERROR_PATTERN,       "errno",     "os_error_candidate",          "os_error"),
 )
+
+
+def _match_error(
+    error_text: str,
+) -> tuple[re.Match[str], str, str, str] | None:
+    for pattern, group, status, kind in _ERROR_CLASSIFIERS:
+        match = pattern.search(error_text)
+        if match is None:
+            continue
+        try:
+            token = match.group(group)
+        except IndexError:
+            continue
+        if token:
+            return match, token, status, kind
+    return None
 
 
 class _ValidatedRedirectHandler(HTTPRedirectHandler):
@@ -288,22 +315,10 @@ class SourceStore:
             raise ValueError("search limit must be between 1 and 50")
 
         # Identify the error kind and primary token from the error text
-        matched_kind: str | None = None
-        matched_token: str | None = None
-        matched_status: str | None = None
-        for pattern, group, status, kind in _ERROR_CLASSIFIERS:
-            m = pattern.search(error_text)
-            if m:
-                try:
-                    matched_token = m.group(group)
-                except IndexError:
-                    matched_token = None
-                matched_kind = kind
-                matched_status = status
-                break
-
-        if matched_status is None or matched_token is None:
+        classification = _match_error(error_text)
+        if classification is None:
             return ()
+        _match, matched_token, matched_status, matched_kind = classification
 
         with self._session() as connection:
             indexed_rows = connection.execute(
@@ -348,6 +363,17 @@ class SourceStore:
                 if row is None:
                     continue
                 record = SourceRecord.from_dict(json.loads(row[0]))
+                if (
+                    record.classification_status != matched_status
+                    or record.attribute_name != candidate_token
+                    or record.error_kind != matched_kind
+                ):
+                    record = replace(
+                        record,
+                        classification_status=matched_status,
+                        attribute_name=candidate_token,
+                        error_kind=matched_kind,
+                    )
                 matches.append(SourceMatch(record, score, reasons))
         return tuple(matches)
 
@@ -368,13 +394,13 @@ class SourceStore:
                 ON CONFLICT(key) DO NOTHING
                 """
             )
-            connection.execute(
-                """
-                INSERT INTO burhan_metadata(key, value)
-                VALUES ('source_schema_version', '3')
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """
-            )
+            schema_row = connection.execute(
+                "SELECT value FROM burhan_metadata WHERE key = 'source_schema_version'"
+            ).fetchone()
+            try:
+                schema_version = int(schema_row[0]) if schema_row is not None else 0
+            except (TypeError, ValueError):
+                schema_version = 0
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS source_record_versions (
@@ -408,7 +434,16 @@ class SourceStore:
                 ON source_record_versions(error_kind, source_id)
                 """
             )
-            self._copy_legacy_records(connection)
+            if schema_version < 4:
+                self._copy_legacy_records(connection)
+                self._backfill_error_kinds(connection)
+            connection.execute(
+                """
+                INSERT INTO burhan_metadata(key, value)
+                VALUES ('source_schema_version', '4')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """
+            )
 
     @staticmethod
     def _copy_legacy_records(connection: sqlite3.Connection) -> None:
@@ -440,6 +475,41 @@ class SourceStore:
                 attribute_name, payload_json
             FROM source_records
             """
+        )
+
+    @staticmethod
+    def _backfill_error_kinds(connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT rowid, classification_status, attribute_name, error_kind, payload_json
+            FROM source_record_versions
+            """
+        ).fetchall()
+        updates: list[tuple[str, str, str, int]] = []
+        for rowid, current_status, current_token, current_kind, payload_json in rows:
+            try:
+                payload = json.loads(payload_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, Mapping):
+                continue
+            error_text = _optional_text(payload.get("error_text"))
+            description = _optional_text(payload.get("problem_description"))
+            classification = _match_error(description or "")
+            if classification is None:
+                classification = _match_error(error_text or "")
+            if classification is None:
+                continue
+            _match, token, status, kind = classification
+            if (current_status, current_token, current_kind) != (status, token, kind):
+                updates.append((status, token, kind, int(rowid)))
+        connection.executemany(
+            """
+            UPDATE source_record_versions
+            SET classification_status = ?, attribute_name = ?, error_kind = ?
+            WHERE rowid = ?
+            """,
+            updates,
         )
 
     @contextmanager
@@ -494,23 +564,13 @@ class SweBenchVerifiedSource:
         fail_to_pass = _json_text_tuple(row.get("FAIL_TO_PASS"), "FAIL_TO_PASS")
         framework_is_pytest = any("::" in item for item in fail_to_pass)
 
-        # Try each error classifier in priority order
         error_match: re.Match[str] | None = None
         error_token: str | None = None
         classification = "unclassified"
         error_kind = "unknown"
-        for pattern, group, status, kind in _ERROR_CLASSIFIERS:
-            m = pattern.search(description)
-            if m and framework_is_pytest:
-                try:
-                    token = m.group(group)
-                except IndexError:
-                    token = None
-                error_match = m
-                error_token = token
-                classification = status
-                error_kind = kind
-                break
+        classified = _match_error(description) if framework_is_pytest else None
+        if classified is not None:
+            error_match, error_token, classification, error_kind = classified
 
         canonical = json.dumps(dict(row), ensure_ascii=False, sort_keys=True)
         provenance = MappingProxyType(
@@ -720,21 +780,12 @@ class GitHubPullRequestSource:
         body = _optional_text(issue.get("body")) or ""
         description = f"{title}\n\n{body}".strip()
 
-        # Try each error classifier in priority order
         error_match_obj: re.Match[str] | None = None
         error_token: str | None = None
         error_kind = "unknown"
-        for pattern, group, _status, kind in _ERROR_CLASSIFIERS:
-            m = pattern.search(description)
-            if m:
-                try:
-                    token = m.group(group)
-                except IndexError:
-                    token = None
-                error_match_obj = m
-                error_token = token
-                error_kind = kind
-                break
+        classified = _match_error(description)
+        if classified is not None:
+            error_match_obj, error_token, _status, error_kind = classified
 
         # For attribute_error, keep the original "attribute" group; otherwise use error_token
         attribute = (

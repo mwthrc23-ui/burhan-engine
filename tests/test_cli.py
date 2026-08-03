@@ -3,11 +3,14 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+import burhan
+from burhan.analyzer import ENGINE_VERSION
 from burhan.cli import main
 
 
@@ -27,6 +30,17 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("burhan 0.6.0", output.getvalue())
+
+    def test_public_version_sources_are_consistent(self) -> None:
+        project = Path(__file__).resolve().parents[1]
+        package_version = tomllib.loads(
+            (project / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]["version"]
+        readme = (project / "README.md").read_text(encoding="utf-8")
+
+        self.assertEqual(package_version, ENGINE_VERSION)
+        self.assertEqual(package_version, burhan.__version__)
+        self.assertIn(f"`{package_version}`", readme)
 
     def test_analyze_command_outputs_machine_readable_bir_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

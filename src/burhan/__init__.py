@@ -1,9 +1,26 @@
 """Burhan: evidence-first semantic diagnosis for source code."""
 
+from .analyzer import ENGINE_VERSION as _ENGINE_VERSION
 from .analyzer import BurhanAnalyzer
-from .model import AnalysisResult, BirEdge, BirNode, BurhanState, Evidence, Hypothesis, NodeKind, Provenance
 from .memory import MemoryMatch, MemoryQuery, RepairEpisode, RepairMemory
-from .patcher import CommandRun, PatchEngine, PatchResult, ProofResult, ProofRunner, VerificationResult
+from .model import (
+    AnalysisResult,
+    BirEdge,
+    BirNode,
+    BurhanState,
+    Evidence,
+    Hypothesis,
+    NodeKind,
+    Provenance,
+)
+from .patcher import (
+    CommandRun,
+    PatchEngine,
+    PatchResult,
+    ProofResult,
+    ProofRunner,
+    VerificationResult,
+)
 
 __all__ = [
     "AnalysisResult",
@@ -14,9 +31,9 @@ __all__ = [
     "CommandRun",
     "Evidence",
     "Hypothesis",
-    "NodeKind",
     "MemoryMatch",
     "MemoryQuery",
+    "NodeKind",
     "PatchEngine",
     "PatchResult",
     "ProofResult",
@@ -27,4 +44,4 @@ __all__ = [
     "VerificationResult",
 ]
 
-__version__ = "0.5.0"
+__version__ = _ENGINE_VERSION
