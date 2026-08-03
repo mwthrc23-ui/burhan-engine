@@ -68,7 +68,7 @@ TS_WRONG_ARG_COUNT = re.compile(
     r"Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<given>\d+)"
 )
 JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
-ENGINE_VERSION = "0.6.0"
+ENGINE_VERSION = "0.6.1"
 
 
 class BurhanAnalyzer:

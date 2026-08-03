@@ -34,6 +34,8 @@ _SAFE_BUG_ID = re.compile(r"^[0-9]+$")
 _MAX_DESCRIPTION_BYTES = 2_000_000
 _MAX_PATCH_BYTES = 5_000_000
 _MAX_TEST_COMMAND_BYTES = 100_000
+_MAX_RECORD_PAYLOAD_BYTES = 13_000_000
+_MAX_MIGRATION_ROWS = 100_000
 
 # ---------------------------------------------------------------------------
 # Error-type patterns used for source record classification
@@ -334,7 +336,7 @@ class SourceStore:
                 """,
                 (matched_status, matched_kind, matched_token),
             ).fetchall()
-            ranked: list[tuple[float, str, str, tuple[str, ...]]] = []
+            ranked: list[tuple[float, str, str, str, tuple[str, ...]]] = []
             for source_id, payload_sha256, candidate_token in indexed_rows:
                 exact = candidate_token == matched_token
                 similarity = difflib.SequenceMatcher(
@@ -348,11 +350,13 @@ class SourceStore:
                     if exact
                     else (f"similar_{matched_kind}_token", "source_attested_dataset_case")
                 )
-                ranked.append((score, source_id, payload_sha256, reasons))
+                ranked.append(
+                    (score, source_id, payload_sha256, candidate_token, reasons)
+                )
             ranked.sort(key=lambda item: (-item[0], item[1]))
 
             matches: list[SourceMatch] = []
-            for score, source_id, payload_sha256, reasons in ranked[:limit]:
+            for score, source_id, payload_sha256, candidate_token, reasons in ranked[:limit]:
                 row = connection.execute(
                     """
                     SELECT payload_json FROM source_record_versions
@@ -465,6 +469,16 @@ class SourceStore:
         }
         if not required.issubset(columns):
             return
+        legacy_count, largest_payload = connection.execute(
+            """
+            SELECT COUNT(*), COALESCE(MAX(length(CAST(payload_json AS BLOB))), 0)
+            FROM source_records
+            """
+        ).fetchone()
+        if int(legacy_count) > _MAX_MIGRATION_ROWS:
+            raise ValueError("legacy source database exceeds the migration row limit")
+        if int(largest_payload) > _MAX_RECORD_PAYLOAD_BYTES:
+            raise ValueError("legacy payload size limit exceeded")
         connection.execute(
             """
             INSERT OR IGNORE INTO source_record_versions (
@@ -479,22 +493,37 @@ class SourceStore:
 
     @staticmethod
     def _backfill_error_kinds(connection: sqlite3.Connection) -> None:
+        row_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM source_record_versions"
+            ).fetchone()[0]
+        )
+        if row_count > _MAX_MIGRATION_ROWS:
+            raise ValueError("source database exceeds the migration row limit")
+
         rows = connection.execute(
             """
             SELECT rowid, classification_status, attribute_name, error_kind, payload_json
             FROM source_record_versions
             """
-        ).fetchall()
-        updates: list[tuple[str, str, str, int]] = []
+        )
+        update_cursor = connection.cursor()
         for rowid, current_status, current_token, current_kind, payload_json in rows:
+            if not isinstance(payload_json, str):
+                continue
+            if len(payload_json.encode("utf-8")) > _MAX_RECORD_PAYLOAD_BYTES:
+                continue
             try:
                 payload = json.loads(payload_json)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(payload, Mapping):
                 continue
-            error_text = _optional_text(payload.get("error_text"))
-            description = _optional_text(payload.get("problem_description"))
+            try:
+                error_text = _optional_text(payload.get("error_text"))
+                description = _optional_text(payload.get("problem_description"))
+            except ValueError:
+                continue
             classification = _match_error(description or "")
             if classification is None:
                 classification = _match_error(error_text or "")
@@ -502,15 +531,14 @@ class SourceStore:
                 continue
             _match, token, status, kind = classification
             if (current_status, current_token, current_kind) != (status, token, kind):
-                updates.append((status, token, kind, int(rowid)))
-        connection.executemany(
-            """
-            UPDATE source_record_versions
-            SET classification_status = ?, attribute_name = ?, error_kind = ?
-            WHERE rowid = ?
-            """,
-            updates,
-        )
+                update_cursor.execute(
+                    """
+                    UPDATE source_record_versions
+                    SET classification_status = ?, attribute_name = ?, error_kind = ?
+                    WHERE rowid = ?
+                    """,
+                    (status, token, kind, int(rowid)),
+                )
 
     @contextmanager
     def _session(self) -> Iterator[sqlite3.Connection]:

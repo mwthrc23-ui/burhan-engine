@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from burhan.memory import MemoryQuery, RepairMemory
 from burhan.sources import (
@@ -694,6 +695,139 @@ class ErrorKindClassificationTests(unittest.TestCase):
         self.assertEqual(alpha.error_kind, "missing_import_name")
         self.assertEqual(alpha.attribute_name, "alpha")
         self.assertEqual([match.record.source_id for match in matches], [alpha.source_id])
+
+    def test_search_restores_each_legacy_payload_token_from_its_own_row(self) -> None:
+        exact_row = self._make_swebench_row(
+            "NameError: name 'calculate' is not defined"
+        )
+        exact_row["instance_id"] = "example__project-exact"
+        similar_row = self._make_swebench_row(
+            "NameError: name 'calculat' is not defined"
+        )
+        similar_row["instance_id"] = "example__project-similar"
+        records = (
+            SweBenchVerifiedSource.to_record(exact_row),
+            SweBenchVerifiedSource.to_record(similar_row),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "store.sqlite3"
+            store = SourceStore(database)
+            for record in records:
+                store.add(record)
+
+            connection = sqlite3.connect(database)
+            try:
+                for source_id, payload_json in connection.execute(
+                    "SELECT source_id, payload_json FROM source_record_versions"
+                ).fetchall():
+                    payload = json.loads(payload_json)
+                    payload.pop("error_kind")
+                    connection.execute(
+                        """
+                        UPDATE source_record_versions
+                        SET payload_json = ?
+                        WHERE source_id = ?
+                        """,
+                        (json.dumps(payload), source_id),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+
+            matches = store.search(
+                "NameError: name 'calculate' is not defined",
+                limit=2,
+            )
+
+        restored_tokens = {
+            match.record.source_id: match.record.attribute_name for match in matches
+        }
+        self.assertEqual(
+            restored_tokens,
+            {record.source_id: record.attribute_name for record in records},
+        )
+
+    def test_backfill_rejects_a_database_over_the_migration_row_limit(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute(
+                """
+                CREATE TABLE source_record_versions (
+                    source_id TEXT,
+                    payload_sha256 TEXT,
+                    classification_status TEXT,
+                    attribute_name TEXT,
+                    error_kind TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO source_record_versions VALUES (
+                    'hostile', 'sha', 'unclassified', NULL, 'unknown', 'not-json'
+                )
+                """
+            )
+
+            with patch("burhan.sources._MAX_MIGRATION_ROWS", 0):
+                with self.assertRaisesRegex(ValueError, "migration row limit"):
+                    SourceStore._backfill_error_kinds(connection)
+        finally:
+            connection.close()
+
+    def test_legacy_copy_enforces_row_and_payload_limits_before_insert(self) -> None:
+        cases = (
+            ("_MAX_MIGRATION_ROWS", 0, "migration row limit"),
+            ("_MAX_RECORD_PAYLOAD_BYTES", 1, "legacy payload size limit"),
+        )
+        for constant, limit, message in cases:
+            with self.subTest(constant=constant):
+                connection = sqlite3.connect(":memory:")
+                try:
+                    connection.execute(
+                        """
+                        CREATE TABLE source_records (
+                            source_id TEXT,
+                            payload_sha256 TEXT,
+                            classification_status TEXT,
+                            attribute_name TEXT,
+                            payload_json TEXT
+                        )
+                        """
+                    )
+                    connection.execute(
+                        """
+                        CREATE TABLE source_record_versions (
+                            source_id TEXT,
+                            payload_sha256 TEXT,
+                            classification_status TEXT,
+                            attribute_name TEXT,
+                            error_kind TEXT DEFAULT 'unknown',
+                            payload_json TEXT,
+                            PRIMARY KEY (source_id, payload_sha256)
+                        )
+                        """
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO source_records VALUES (
+                            'legacy', 'sha', 'unclassified', NULL, '{"x": "payload"}'
+                        )
+                        """
+                    )
+
+                    with patch(f"burhan.sources.{constant}", limit):
+                        with self.assertRaisesRegex(ValueError, message):
+                            SourceStore._copy_legacy_records(connection)
+
+                    copied = connection.execute(
+                        "SELECT COUNT(*) FROM source_record_versions"
+                    ).fetchone()[0]
+                    self.assertEqual(copied, 0)
+                finally:
+                    connection.close()
 
     def test_windows_file_not_found_and_os_error_are_classified(self) -> None:
         windows_row = self._make_swebench_row(
