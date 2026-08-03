@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from burhan.scanner import IncrementalProjectScanner, ScanCache, ScanLimits
+from burhan.scanner import IncrementalProjectScanner, ScanCache
 
 
 # ---------------------------------------------------------------------------

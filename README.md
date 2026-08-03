@@ -2,7 +2,7 @@
 
 بُرهان محرك تجريبي يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة ودالة طاقة.
 
-هذه النسخة `0.6.1` هي إثبات فكرة قابل للتجربة: التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API. أضيف إثبات إصلاح سلوكي داخل Docker مع بقاء المشروع الأصلي دون تغيير.
+هذه النسخة `0.7.0` تضيف **Burhan Evidence Gate** كمرحلة تجارية أولى: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
 
 ## البدء السريع (أسهل طريق)
 
@@ -52,6 +52,74 @@ docker build -t burhan-engine:local .
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -w /workspace burhan-engine:local analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+```
+
+## Burhan Evidence Gate للفرق وCI
+
+يشغّل `ci-gate` التحليل والإثبات بنفسه؛ لا يقبل ملف `ProofResult` يقدمه المستخدم. ثم يطبق سياسة JSON صارمة ويكتب تقريرًا لا يحتوي الكود أو رسالة الخطأ الخام أو فرق الرقعة أو أمر الاختبار أو `stdout/stderr`.
+
+```bash
+burhan ci-gate \
+  --project . \
+  --goal "أثبت الإصلاح دون تغيير الأصل" \
+  --error-file failure.txt \
+  --policy examples/ci-policy-v2.json \
+  --report burhan-gate-report.json \
+  --trust-local-tests \
+  --test-program python \
+  --test-arg app.py \
+  --backend docker \
+  --json
+```
+
+عقد رموز الخروج:
+
+- `0`: الإثبات اجتاز جميع قواعد السياسة.
+- `1`: التنفيذ صالح لكن الإثبات أو السياسة رفضا الإصلاح؛ يُكتب تقرير رفض عند تحديد `--report`.
+- `2`: إعداد أو بنية تحتية أو مسار تقرير غير صالح.
+
+سياسة البوابة محدودة إلى 64 KiB، ترفض الحقول والقيم المكررة أو المجهولة، ولا تسمح بتعطيل اكتمال المسح أو ثبات المشروع الأصلي. تقرير JSON يحمل بصمة للسياسة وبصمة ذاتية للمحتوى، ويربط بصمات منقحة لأمر الاختبار وبيئة التشغيل وmanifest كامل لمدخلات المشروع دون كشف قيمها الخام. يمكن للسياسة تثبيت الأمر والبيئة عبر `allowed_command_fingerprints` و`allowed_runtime_fingerprints` لمنع استبدال الاختبار باختبار أضيق أو تغيير Docker digest. هذه البصمات checksums لكشف التغيير وليست توقيعًا رقميًا أو إثباتًا لهوية المنشئ. مسار `--report` يجب أن يكون ملفًا جديدًا بلاحقة `.json`، ولا يستبدل ملفًا أو رابطًا رمزيًا موجودًا.
+
+سياسة المثال مثبتة للأمر `python app.py` ولصورة Python المبينة أدناه. إذا تغير الأمر أو digest، احسب القيم الجديدة من الدالتين `burhan.policy.fingerprint_command` و`fingerprint_runtime` وحدّث السياسة المحمية. كما يبني الإثبات manifest مؤطرًا قبل التحليل وبعده (حتى 15,000 عنصر و10,000 ملف و250 MB)، ويرفض التشغيل إذا تغير المشروع بين التحليل والإثبات أو تغير المحتوى أو البنية أو الصلاحيات أثناء الاختبار. ملفات الأسرار لا تُقرأ؛ يسمح Docker/V2 بمراقبة metadata لها لأن المشروع الأصلي غير مركب داخل الحاوية، بينما يرفض `local/V1` المشروع إذا اكتشف ملف أسرار لأنه لا يستطيع تقديم ضمان قوي دون قراءته. ويُرفض أي هدف داخل مجلد مستبعد من المسح قبل تشغيل الاختبار، كما تقبل صورة Docker صيغة OCI آمنة مثبتة فقط ولا يمكن أن تبدأ كخيار CLI.
+
+> **مهم في Pull Requests غير الموثوقة:** لا تحمل السياسة من فرع المساهم. انسخها من فرع محمي أو من `RUNNER_TEMP` بعد التحقق من بصمتها، ثم ارفع التقرير كـartifact. اجعل workflow نفسه فحصًا إلزاميًا ومحميًا عبر GitHub Ruleset حتى لا يستطيع PR تعديل خطوة البوابة وتجاوزها. الإعداد الافتراضي يتطلب `V2` وDocker؛ تشغيل `local/V1` مخصص فقط لمشروع واختبارات موثوقة لأنه ليس عزلًا أمنيًا.
+
+يجب كذلك فصل **أداة بُرهان الموثوقة** عن **المستودع الجاري تحليله**: في workflow المحمي ثبّت نسخة منشورة ومثبتة من `burhan-engine` أو wheel من بناء محمي، ولا تثبّت بُرهان من checkout الخاص بالـPR. في البيئات عالية الحساسية استخدم `--require-hashes` مع بصمة wheel المنشورة.
+
+مثال GitHub Actions مختصر:
+
+```yaml
+- name: Install Burhan and preload pinned proof image
+  env:
+    BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+  run: |
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.7.0"
+    docker pull "$BURHAN_DOCKER_IMAGE"
+- name: Load protected Burhan policy
+  env:
+    BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    EXPECTED_POLICY_SHA256: ${{ vars.BURHAN_POLICY_SHA256 }}
+  run: |
+    git fetch origin "$BASE_SHA" --depth=1
+    git show "$BASE_SHA:examples/ci-policy-v2.json" > "$RUNNER_TEMP/burhan-policy.json"
+    actual="$(sha256sum "$RUNNER_TEMP/burhan-policy.json" | cut -d ' ' -f 1)"
+    test -n "$EXPECTED_POLICY_SHA256" && test "$actual" = "$EXPECTED_POLICY_SHA256"
+- name: Run Burhan Evidence Gate
+  env:
+    BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+  run: |
+    burhan ci-gate --project . --goal "أثبت الإصلاح" \
+      --error-file "$RUNNER_TEMP/failure.txt" \
+      --policy "$RUNNER_TEMP/burhan-policy.json" \
+      --report "$RUNNER_TEMP/burhan-report.json" \
+      --trust-local-tests --test-program python --test-arg app.py \
+      --backend docker --docker-image "$BURHAN_DOCKER_IMAGE" --json
+- name: Upload Burhan report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: burhan-evidence-report
+    path: ${{ runner.temp }}/burhan-report.json
 ```
 
 ## تجربة كاملة بنقرة واحدة

@@ -68,7 +68,7 @@ TS_WRONG_ARG_COUNT = re.compile(
     r"Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<given>\d+)"
 )
 JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
-ENGINE_VERSION = "0.6.1"
+ENGINE_VERSION = "0.7.0"
 
 
 class BurhanAnalyzer:
@@ -99,7 +99,7 @@ class BurhanAnalyzer:
                 engine_version=ENGINE_VERSION,
                 input_fingerprint=f"sha256:{digest}",
                 analyzed_files=len(snapshot.files),
-                scan_truncated=snapshot.truncated,
+                scan_truncated=snapshot.incomplete,
             ),
             residual_risks=residual_risks,
             questions=questions,
@@ -647,7 +647,7 @@ class BurhanAnalyzer:
     @staticmethod
     def _residual_risks(snapshot: ProjectSnapshot, hypothesis: Hypothesis) -> tuple[str, ...]:
         risks = ["لم تُشغّل اختبارات المشروع للتحقق من التشخيص بعد"]
-        if snapshot.truncated:
+        if snapshot.incomplete:
             risks.append("توقف مسح المشروع عند حد الموارد؛ قد يكون السياق ناقصًا")
         if hypothesis.kind == "insufficient_evidence":
             risks.append("السبب الجذري غير محدد بسبب نقص الأدلة")

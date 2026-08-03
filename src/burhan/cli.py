@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -14,11 +16,15 @@ from .patcher import (
     PYTEST_DOCKER_IMAGE,
     PatchEngine,
     PatchResult,
+    ProofConfigurationError,
+    ProofInfrastructureError,
+    ProofRejected,
     ProofResult,
     ProofRunner,
     inject_test_evidence,
 )
-from .scanner import ProjectScanner, build_code_tree
+from .policy import GatePolicy, evaluate_gate, load_policy, proof_failure_report
+from .scanner import ProjectScanner, build_code_tree, is_reparse_path
 from .sources import (
     BugsInPySource,
     GitHubPullRequestSource,
@@ -64,17 +70,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="أثبت انتقال اختبار موثوق من الفشل إلى النجاح دون تعديل الأصل",
     )
     _add_case_arguments(proof)
-    proof.add_argument(
-        "--trust-local-tests",
-        action="store_true",
-        help="أقر بأن أمر الاختبار من مشروع محلي موثوق",
-    )
-    proof.add_argument("--test-program", choices=("python", "pytest"), default="python")
-    proof.add_argument("--test-arg", action="append", default=[])
-    proof.add_argument("--timeout", type=float, default=30.0)
-    proof.add_argument("--backend", choices=("local", "docker"), default="local")
-    proof.add_argument("--docker-image", default=DEFAULT_DOCKER_IMAGE)
+    _add_proof_arguments(proof, backend_default="local")
     proof.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    ci_gate = subcommands.add_parser(
+        "ci-gate",
+        help="شغّل إثباتًا وقيّمه بسياسة مؤسسية وأصدر تقرير تدقيق آمنًا",
+    )
+    _add_case_arguments(ci_gate)
+    _add_proof_arguments(ci_gate, backend_default="docker")
+    ci_gate.add_argument("--policy", type=Path, help="ملف سياسة JSON؛ الافتراضي يتطلب V2")
+    ci_gate.add_argument("--report", type=Path, help="اكتب تقرير التدقيق ذريًا إلى ملف JSON")
+    ci_gate.add_argument("--json", action="store_true", help="أخرج تقرير القرار بصيغة JSON")
     memory_add = subcommands.add_parser(
         "memory-add",
         help="إضافة JSON مباشرة معطلة مؤقتًا حتى تُفصل الحالات غير الموثوقة عن الذاكرة المرقّاة",
@@ -179,10 +185,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_case_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--project", type=Path, required=True, help="مسار المشروع")
-    command.add_argument("--goal", required=True, help="هدف المستخدم والقيود المهمة")
+    command.add_argument(
+        "--goal",
+        type=_goal_text,
+        required=True,
+        help="هدف المستخدم والقيود المهمة",
+    )
     error_group = command.add_mutually_exclusive_group(required=True)
-    error_group.add_argument("--error", help="نص الخطأ مباشرة")
+    error_group.add_argument("--error", type=_direct_error_text, help="نص الخطأ مباشرة")
     error_group.add_argument("--error-file", type=Path, help="ملف UTF-8 يحتوي رسالة الخطأ")
+
+
+def _add_proof_arguments(command: argparse.ArgumentParser, *, backend_default: str) -> None:
+    command.add_argument(
+        "--trust-local-tests",
+        action="store_true",
+        help="أقر بأن أمر الاختبار من مشروع محلي موثوق",
+    )
+    command.add_argument("--test-program", choices=("python", "pytest"), default="python")
+    command.add_argument("--test-arg", action="append", default=[])
+    command.add_argument("--timeout", type=float, default=30.0)
+    command.add_argument(
+        "--backend",
+        choices=("local", "docker"),
+        default=backend_default,
+    )
+    command.add_argument("--docker-image", default=DEFAULT_DOCKER_IMAGE)
+
+
+def _goal_text(value: str) -> str:
+    if not value.strip() or len(value.encode("utf-8")) > 16_384:
+        raise argparse.ArgumentTypeError("goal must be non-empty and at most 16 KiB")
+    return value
+
+
+def _direct_error_text(value: str) -> str:
+    if not value.strip() or len(value.encode("utf-8")) > 1_000_000:
+        raise argparse.ArgumentTypeError("error text must be non-empty and at most 1 MB")
+    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -210,6 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _code_tree(args)
     if args.command == "repair-proof":
         return _repair_proof(args)
+    if args.command == "ci-gate":
+        return _ci_gate(args)
     try:
         error_text = _read_error(args.error, args.error_file)
         result = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
@@ -318,6 +360,162 @@ def _repair_proof(args: argparse.Namespace) -> int:
         _print_analysis(analysis)
         _print_proof(proof)
     return 0
+
+
+def _ci_gate(args: argparse.Namespace) -> int:
+    if not args.trust_local_tests:
+        print(
+            "خطأ: تتطلب بوابة CI إقرار --trust-local-tests لأن الاختبار ينفذ كود المشروع",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        policy = load_policy(args.policy) if args.policy is not None else GatePolicy()
+        report_path = _validate_gate_report_target(
+            args.report,
+            policy_path=args.policy,
+            error_path=args.error_file,
+        )
+        error_text = _read_error(args.error, args.error_file)
+        default_args = ("app.py",) if args.test_program == "python" else ("-q",)
+        docker_image = _resolve_proof_docker_image(
+            test_program=args.test_program,
+            backend=args.backend,
+            docker_image=args.docker_image,
+        )
+        test_args = tuple(args.test_arg) or default_args
+        project_fingerprint = ProofRunner.fingerprint_project(
+            args.project, backend=args.backend
+        )
+        analysis = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
+    except (OSError, RuntimeError, UnicodeError, ValueError) as error:
+        del error
+        print("خطأ في إعداد بوابة CI [configuration_error]", file=sys.stderr)
+        return 2
+    except Exception:
+        print("خطأ في إعداد بوابة CI [internal_error]", file=sys.stderr)
+        return 2
+
+    try:
+        proof = ProofRunner().prove(
+            args.project,
+            analysis.primary,
+            test_program=args.test_program,
+            test_args=test_args,
+            timeout_seconds=args.timeout,
+            backend=args.backend,
+            docker_image=docker_image,
+            expected_project_fingerprint=project_fingerprint,
+        )
+        analysis = inject_test_evidence(analysis, proof)
+        report = evaluate_gate(analysis, proof, policy)
+    except ProofRejected as error:
+        report = proof_failure_report(
+            analysis,
+            policy,
+            backend=args.backend,
+            command=(args.test_program,) + test_args,
+            runtime=docker_image if args.backend == "docker" else sys.version.split()[0],
+            project_manifest_fingerprint=project_fingerprint,
+        )
+        try:
+            _emit_gate_report(report.to_dict(), path=report_path, as_json=args.json)
+        except (OSError, UnicodeError, ValueError) as report_error:
+            del report_error
+            print("خطأ في كتابة تقرير بوابة CI [report_write_failed]", file=sys.stderr)
+            return 2
+        del error
+        print("رفضت بوابة CI الإثبات [proof_rejected]", file=sys.stderr)
+        return 1
+    except (
+        OSError,
+        ProofConfigurationError,
+        ProofInfrastructureError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+    ) as error:
+        code = (
+            "proof_infrastructure_error"
+            if isinstance(error, (OSError, ProofInfrastructureError))
+            else "proof_configuration_error"
+        )
+        print(f"خطأ في تشغيل بوابة CI [{code}]", file=sys.stderr)
+        return 2
+    except Exception:
+        print("خطأ في تشغيل بوابة CI [internal_error]", file=sys.stderr)
+        return 2
+
+    try:
+        _emit_gate_report(report.to_dict(), path=report_path, as_json=args.json)
+    except (OSError, UnicodeError, ValueError) as error:
+        del error
+        print("خطأ في كتابة تقرير بوابة CI [report_write_failed]", file=sys.stderr)
+        return 2
+    return 0 if report.passed else 1
+
+
+def _validate_gate_report_target(
+    report_path: Path | None,
+    *,
+    policy_path: Path | None,
+    error_path: Path | None,
+) -> Path | None:
+    if report_path is None:
+        return None
+    absolute = Path(os.path.abspath(report_path.expanduser()))
+    if absolute.suffix.lower() != ".json":
+        raise ValueError("report path must end with .json")
+    if os.path.lexists(absolute):
+        raise ValueError("report path must not already exist")
+    for parent in absolute.parents:
+        if parent.is_symlink() or is_reparse_path(parent):
+            raise ValueError("report path must not pass through a symlink or junction")
+    if not absolute.parent.is_dir():
+        raise ValueError("report parent directory does not exist")
+    protected = tuple(
+        Path(os.path.abspath(path.expanduser()))
+        for path in (policy_path, error_path)
+        if path is not None
+    )
+    if absolute in protected:
+        raise ValueError("report path must not overwrite the policy or error file")
+    return absolute
+
+
+def _emit_gate_report(payload: dict[str, object], *, path: Path | None, as_json: bool) -> None:
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if path is not None:
+        if os.path.lexists(path):
+            raise ValueError("report path must not already exist")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".burhan-gate-",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary_path, path, follow_symlinks=False)
+            except FileExistsError as error:
+                raise ValueError("report path appeared during report generation") from error
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    if as_json:
+        print(encoded, end="")
+        return
+    print(f"قرار بوابة CI: {str(payload['decision']).upper()}")
+    print(f"القضية: {_terminal_text(str(payload['case_id']))}")
+    violations = payload.get("violations", [])
+    if isinstance(violations, list):
+        for item in violations:
+            if isinstance(item, dict):
+                print(f"- {_terminal_text(str(item.get('code', 'policy_denied')))}")
 
 
 def _resolve_proof_docker_image(*, test_program: str, backend: str, docker_image: str) -> str:
@@ -634,6 +832,8 @@ def _print_memory_matches(matches: object) -> None:
 
 def _read_error(error: str | None, error_file: Path | None) -> str:
     if error is not None:
+        if len(error.encode("utf-8")) > 1_000_000:
+            raise ValueError("error text exceeds 1000000 bytes")
         return error
     if error_file is None:
         raise ValueError("error input is required")
