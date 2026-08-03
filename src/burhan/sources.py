@@ -42,6 +42,9 @@ _MAX_TEST_COMMAND_BYTES = 100_000
 _NAME_ERROR_PATTERN = re.compile(
     r"NameError:\s+name\s+['\"](?P<name>[^'\"]+)['\"]\s+is not defined"
 )
+_UNBOUND_ERROR_PATTERN = re.compile(
+    r"UnboundLocalError:\s+(?:local variable|cannot access local variable)\s+['\"](?P<name>[^'\"]+)['\"]"
+)
 _TYPE_ERROR_PATTERN = re.compile(
     r"TypeError:\s+(?P<message>[^\n]+)"
 )
@@ -51,16 +54,37 @@ _MODULE_ERROR_PATTERN = re.compile(
 _KEY_ERROR_PATTERN = re.compile(
     r"KeyError:\s+'?(?P<name>[^'\n]+)'?"
 )
+_VALUE_ERROR_PATTERN = re.compile(
+    r"ValueError:\s+(?P<message>[^\n]+)"
+)
+_INDEX_ERROR_PATTERN = re.compile(
+    r"IndexError:\s+(?P<message>[^\n]+)"
+)
+_ZERO_DIV_PATTERN = re.compile(
+    r"ZeroDivisionError:\s+(?P<message>[^\n]+)"
+)
+_RECURSION_PATTERN = re.compile(
+    r"RecursionError:\s+(?P<message>[^\n]+)"
+)
+_FILE_NOT_FOUND_PATTERN = re.compile(
+    r"FileNotFoundError:\s+\[Errno 2\]\s+No such file or directory:\s+'(?P<path>[^']+)'"
+)
 
 # Map (pattern, group, classification_status, error_kind)
 _ERROR_CLASSIFIERS: tuple[
     tuple[re.Pattern[str], str, str, str], ...
 ] = (
-    (ATTRIBUTE_ERROR, "attribute",   "attribute_error_candidate", "attribute_error"),
-    (_NAME_ERROR_PATTERN,   "name",  "name_error_candidate",      "name_error"),
-    (_TYPE_ERROR_PATTERN,   "message", "type_error_candidate",    "type_error"),
-    (_MODULE_ERROR_PATTERN, "name",  "module_error_candidate",    "module_error"),
-    (_KEY_ERROR_PATTERN,    "name",  "key_error_candidate",       "key_error"),
+    (ATTRIBUTE_ERROR,         "attribute", "attribute_error_candidate",   "attribute_error"),
+    (_NAME_ERROR_PATTERN,     "name",      "name_error_candidate",        "name_error"),
+    (_UNBOUND_ERROR_PATTERN,  "name",      "name_error_candidate",        "unbound_local_error"),
+    (_TYPE_ERROR_PATTERN,     "message",   "type_error_candidate",        "type_error"),
+    (_MODULE_ERROR_PATTERN,   "name",      "module_error_candidate",      "module_error"),
+    (_KEY_ERROR_PATTERN,      "name",      "key_error_candidate",         "key_error"),
+    (_VALUE_ERROR_PATTERN,    "message",   "value_error_candidate",       "value_error"),
+    (_INDEX_ERROR_PATTERN,    "message",   "index_error_candidate",       "index_error"),
+    (_ZERO_DIV_PATTERN,       "message",   "zero_div_candidate",          "zero_division_error"),
+    (_RECURSION_PATTERN,      "message",   "recursion_candidate",         "recursion_error"),
+    (_FILE_NOT_FOUND_PATTERN, "path",      "file_not_found_candidate",    "file_not_found_error"),
 )
 
 

@@ -68,19 +68,19 @@ powershell -ExecutionPolicy Bypass -File scripts\try-burhan.ps1
 - فهرسة آمنة ومحدودة لملفات Python وTypeScript/JavaScript وبعض ملفات الإعداد والتوثيق.
 - استبعاد `.env` والمفاتيح الخاصة ومجلدات `.git` و`node_modules` والبناء والتغطية.
 - استخراج رموز Python عبر AST، واستخراج أولي لرموز TypeScript/JavaScript.
-- تشخيص `NameError` و`ModuleNotFoundError` و`SyntaxError` في Python.
-- تشخيص أخطاء TypeScript القياسية، ومنها `TS2304` و`TS2322`.
-- اقتراح رمز قريب عند وجود خطأ إملائي في اسم Python.
+- تشخيص أخطاء Python: `NameError` و`UnboundLocalError` و`AttributeError` و`ModuleNotFoundError` / `ImportError` و`SyntaxError` و`TypeError` (عدد وسطاء غلط، كائن غير قابل للاستدعاء، عملية غير مدعومة، عام) و`ValueError` و`IndexError` و`KeyError` و`ZeroDivisionError` و`RecursionError` و`FileNotFoundError` / `OSError`.
+- تشخيص أخطاء TypeScript: `TS2304` (اسم غير معروف) و`TS2322` (تعارض نوع) و`TS2339` (خاصية مفقودة) و`TS2345` (نوع وسيط غير متوافق) و`TS2554` (عدد وسطاء غلط).
+- اقتراح رمز قريب عند وجود خطأ إملائي في اسم Python أو TypeScript.
 - إخراج بشري عربي أو JSON يتضمن BIR والأدلة والثقة والطاقة وزمن التحليل.
 - رقم قضية ثابت وبصمة SHA-256 ومدى اكتمال المسح والمخاطر المتبقية.
 - استخراج القيود الصريحة من الهدف، مثل «لا تغيّر الواجهة».
-- أمر `repair` ينشئ unified diff ويمنحه درجة `V0` بعد فحص النطاق والسطر وصياغة Python.
+- أمر `repair` ينشئ unified diff ويمنحه درجة `V0` بعد فحص النطاق والسطر وصياغة Python؛ يدعم إصلاح `NameError` و`UnboundLocalError` عند توفر رمز بديل قريب.
 - أمر `repair-proof` يعيد الاختبار نفسه قبل الرقعة وبعدها داخل نسخة مؤقتة.
 - يمنح `V2` عند تحقق fail-to-pass داخل Docker بشبكة معطلة وحدود موارد وملفات للقراءة فقط.
 - المعاينة هي الوضع الافتراضي؛ الكتابة تحتاج الخيار الصريح `--apply`.
 - التوقف وطلب دليل إضافي بدل اختراع سبب غير مدعوم.
 - قراءة حالات `RepairEpisode` الموثقة مسبقًا من SQLite؛ إدخال ملفات JSON عبر CLI معطل مؤقتًا حتى يمكن إعادة إثباتها وربطها بالحالة والرقعة.
-- البحث عن حالات `AttributeError` و`NameError` و`TypeError` و`ModuleNotFoundError` و`KeyError` مشابهة حسب النوع والرمز.
+- البحث عن حالات مشابهة حسب النوع والرمز لأكثر من 11 نوع خطأ مصنّف.
 - ربط نتائج ذاكرة الإصلاح بالتشخيص الجديد عبر `analyze --memory`.
 - جمع حالات حقيقية محدودة من SWE-bench Verified مع الوصف والرقعة ورقعة الاختبار و`FAIL_TO_PASS`، مع تصنيف تلقائي لأنواع الأخطاء (`attribute_error_candidate`، `name_error_candidate`، `module_error_candidate`، إلخ).
 - جمع حزمة BugsInPy المحددة مع commit والرقعة وأمر الاختبار، من دون تنفيذ أي كود وارد من المصدر.
