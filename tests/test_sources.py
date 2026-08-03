@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import replace
@@ -476,6 +477,240 @@ class ErrorKindClassificationTests(unittest.TestCase):
             )
             self.assertEqual(len(unbound_matches), 1)
             self.assertEqual(unbound_matches[0].record.error_kind, "unbound_local_error")
+
+    def test_legacy_rows_are_backfilled_and_remain_searchable(self) -> None:
+        row = self._make_swebench_row(
+            "NameError: name 'calculate' is not defined"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        legacy_payload = record.to_dict()
+        legacy_payload.pop("error_kind")
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "store.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE source_record_versions (
+                        source_id TEXT NOT NULL,
+                        payload_sha256 TEXT NOT NULL,
+                        classification_status TEXT NOT NULL,
+                        attribute_name TEXT,
+                        payload_json TEXT NOT NULL,
+                        imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (source_id, payload_sha256)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_record_versions (
+                        source_id, payload_sha256, classification_status,
+                        attribute_name, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.source_id,
+                        record.payload_sha256,
+                        record.classification_status,
+                        record.attribute_name,
+                        json.dumps(legacy_payload),
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = SourceStore(database)
+            matches = store.search("NameError: name 'calculate' is not defined")
+
+            connection = sqlite3.connect(database)
+            try:
+                migrated_kind = connection.execute(
+                    "SELECT error_kind FROM source_record_versions WHERE source_id = ?",
+                    (record.source_id,),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(migrated_kind, "name_error")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].record.source_id, record.source_id)
+        self.assertEqual(matches[0].record.error_kind, "name_error")
+
+    def test_legacy_import_row_is_reclassified_from_full_description(self) -> None:
+        row = self._make_swebench_row(
+            "ImportError: cannot import name 'alpha' from 'pkg.a'"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        legacy_payload = record.to_dict()
+        legacy_payload.pop("error_kind")
+        legacy_payload["classification_status"] = "module_error_candidate"
+        legacy_payload["attribute_name"] = "cannot"
+        legacy_payload["error_text"] = "ImportError: cannot"
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "store.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE source_record_versions (
+                        source_id TEXT NOT NULL,
+                        payload_sha256 TEXT NOT NULL,
+                        classification_status TEXT NOT NULL,
+                        attribute_name TEXT,
+                        payload_json TEXT NOT NULL,
+                        imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (source_id, payload_sha256)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_record_versions (
+                        source_id, payload_sha256, classification_status,
+                        attribute_name, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.source_id,
+                        record.payload_sha256,
+                        "module_error_candidate",
+                        "cannot",
+                        json.dumps(legacy_payload),
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = SourceStore(database)
+            matches = store.search(
+                "ImportError: cannot import name 'alpha' from 'pkg.a'"
+            )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].record.error_kind, "missing_import_name")
+        self.assertEqual(matches[0].record.attribute_name, "alpha")
+
+    def test_v3_import_row_with_old_module_kind_is_reclassified(self) -> None:
+        row = self._make_swebench_row(
+            "ImportError: cannot import name 'alpha' from 'pkg.a'"
+        )
+        record = SweBenchVerifiedSource.to_record(row)
+        legacy_payload = record.to_dict() | {
+            "classification_status": "module_error_candidate",
+            "attribute_name": "cannot",
+            "error_kind": "module_error",
+            "error_text": "ImportError: cannot",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "store.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE source_record_versions (
+                        source_id TEXT NOT NULL,
+                        payload_sha256 TEXT NOT NULL,
+                        classification_status TEXT NOT NULL,
+                        attribute_name TEXT,
+                        error_kind TEXT NOT NULL DEFAULT 'unknown',
+                        payload_json TEXT NOT NULL,
+                        imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (source_id, payload_sha256)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO source_record_versions (
+                        source_id, payload_sha256, classification_status,
+                        attribute_name, error_kind, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.source_id,
+                        record.payload_sha256,
+                        "module_error_candidate",
+                        "cannot",
+                        "module_error",
+                        json.dumps(legacy_payload),
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = SourceStore(database)
+            matches = store.search(
+                "ImportError: cannot import name 'alpha' from 'pkg.a'"
+            )
+
+            connection = sqlite3.connect(database)
+            try:
+                migrated = connection.execute(
+                    """
+                    SELECT classification_status, attribute_name, error_kind
+                    FROM source_record_versions
+                    WHERE source_id = ?
+                    """,
+                    (record.source_id,),
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertEqual(
+            migrated,
+            ("module_error_candidate", "alpha", "missing_import_name"),
+        )
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].record.attribute_name, "alpha")
+        self.assertEqual(matches[0].record.error_kind, "missing_import_name")
+
+    def test_import_name_sources_are_isolated_by_missing_name(self) -> None:
+        alpha_row = self._make_swebench_row(
+            "ImportError: cannot import name 'alpha' from 'pkg.a'"
+        )
+        alpha_row["instance_id"] = "example__project-alpha"
+        beta_row = self._make_swebench_row(
+            "ImportError: cannot import name 'beta' from 'pkg.b'"
+        )
+        beta_row["instance_id"] = "example__project-beta"
+        alpha = SweBenchVerifiedSource.to_record(alpha_row)
+        beta = SweBenchVerifiedSource.to_record(beta_row)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SourceStore(Path(directory) / "store.sqlite3")
+            store.add(alpha)
+            store.add(beta)
+            matches = store.search(
+                "ImportError: cannot import name 'alpha' from 'pkg.a'"
+            )
+
+        self.assertEqual(alpha.error_kind, "missing_import_name")
+        self.assertEqual(alpha.attribute_name, "alpha")
+        self.assertEqual([match.record.source_id for match in matches], [alpha.source_id])
+
+    def test_windows_file_not_found_and_os_error_are_classified(self) -> None:
+        windows_row = self._make_swebench_row(
+            "FileNotFoundError: [WinError 2] The system cannot find the file specified: "
+            "'C:\\data\\config.json'"
+        )
+        os_row = self._make_swebench_row(
+            "OSError: [Errno 111] Connection refused"
+        )
+
+        windows_record = SweBenchVerifiedSource.to_record(windows_row)
+        os_record = SweBenchVerifiedSource.to_record(os_row)
+
+        self.assertEqual(windows_record.error_kind, "file_not_found_error")
+        self.assertEqual(windows_record.attribute_name, "C:\\data\\config.json")
+        self.assertEqual(os_record.error_kind, "os_error")
+        self.assertEqual(os_record.attribute_name, "111")
 
     def test_attribute_error_search_still_works_with_new_schema(self) -> None:
         row = _swebench_attribute_error_row()

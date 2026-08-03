@@ -146,6 +146,63 @@ print("healthy")
                 with self.assertRaisesRegex(ValueError, "does not match analyzed error"):
                     ProofRunner().prove(project, undefined_name_hypothesis(), timeout_seconds=5)
 
+    def test_unbound_baseline_rejects_a_longer_name_with_the_same_prefix(self) -> None:
+        hypothesis = Hypothesis(
+            kind="unbound_local_variable",
+            target="foo",
+            explanation="The local name is wrong.",
+            location="app.py:1",
+            energy=1.0,
+            confidence=0.99,
+            suggested_replacement="bar",
+        )
+        failure = CommandRun(
+            1,
+            False,
+            1.0,
+            "",
+            '  File "app.py", line 1, in <module>\n'
+            "UnboundLocalError: cannot access local variable 'foobar' "
+            "where it is not associated with a value\n",
+            False,
+        )
+
+        self.assertFalse(
+            ProofRunner._baseline_matches_hypothesis(failure, hypothesis)
+        )
+
+    def test_unbound_baseline_accepts_exact_old_and_modern_messages(self) -> None:
+        hypothesis = Hypothesis(
+            kind="unbound_local_variable",
+            target="result",
+            explanation="The local name is unbound.",
+            location="app.py:4",
+            energy=1.0,
+            confidence=0.99,
+            suggested_replacement="resolved",
+        )
+        messages = (
+            "UnboundLocalError: local variable 'result' referenced before assignment",
+            (
+                "UnboundLocalError: cannot access local variable 'result' "
+                "where it is not associated with a value"
+            ),
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                failure = CommandRun(
+                    1,
+                    False,
+                    1.0,
+                    "",
+                    '  File "app.py", line 4, in compute\n' + message,
+                    False,
+                )
+                self.assertTrue(
+                    ProofRunner._baseline_matches_hypothesis(failure, hypothesis)
+                )
+
     def test_prove_rejects_same_basename_from_a_different_directory(self) -> None:
         wrong_file = CommandRun(
             1,
