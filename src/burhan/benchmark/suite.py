@@ -25,6 +25,11 @@ Design rules
   produce as rank-1 for a *correct* diagnosis.
 * ``curated`` flag marks cases with a known ground-truth repair;
   non-curated cases are still valid diagnostic targets.
+* Cases with an empty ``expected_error_family`` are negative controls and
+  must be evaluated without an error-family hint.
+* ``patchable`` marks ground-truth cases supported by the local preview-only
+  ``PatchEngine``; success requires an exact ``expected_patched_source`` match
+  after applying inside a temporary project. No case executes project code.
 """
 from __future__ import annotations
 
@@ -64,6 +69,8 @@ class BenchmarkCase:
         Raw error / traceback text as it appears at runtime.
     source_snippet:
         Minimal source code that triggers the error (may be empty).
+    source_path:
+        Relative path used when materialising the snippet.
     expected_error_family:
         The canonical family the engine should classify this as.
     expected_top1_kind:
@@ -74,6 +81,10 @@ class BenchmarkCase:
         Short description of the fix (empty string if not curated).
     notes:
         Optional free-text notes for reviewers.
+    patchable:
+        True when the case is an expected PatchEngine repair candidate.
+    expected_patched_source:
+        Exact source expected after a successful patch application.
     """
 
     case_id: str
@@ -86,11 +97,40 @@ class BenchmarkCase:
     curated: bool
     ground_truth_repair: str = ""
     notes: str = ""
+    source_path: str = ""
+    patchable: bool = False
+    expected_patched_source: str = ""
 
     def __post_init__(self) -> None:
         if self.error_family not in VALID_FAMILIES:
             raise ValueError(
                 f"case {self.case_id}: unknown error_family {self.error_family!r}"
+            )
+        if not self.expected_error_family and (
+            self.curated
+            or self.expected_top1_kind
+            or self.ground_truth_repair
+            or self.patchable
+            or self.expected_patched_source
+        ):
+            raise ValueError(
+                f"case {self.case_id}: negative controls cannot declare repair targets"
+            )
+        if self.patchable and (not self.curated or self.language != "python"):
+            raise ValueError(
+                f"case {self.case_id}: patchable cases must be curated Python cases"
+            )
+        if self.patchable and not self.source_path:
+            raise ValueError(
+                f"case {self.case_id}: patchable cases require source_path"
+            )
+        if self.patchable and not self.expected_patched_source:
+            raise ValueError(
+                f"case {self.case_id}: patchable cases require expected_patched_source"
+            )
+        if self.expected_patched_source and not self.patchable:
+            raise ValueError(
+                f"case {self.case_id}: expected_patched_source requires patchable=True"
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,11 +140,14 @@ class BenchmarkCase:
             "error_family": self.error_family,
             "error_text": self.error_text,
             "source_snippet": self.source_snippet,
+            "source_path": self.source_path,
             "expected_error_family": self.expected_error_family,
             "expected_top1_kind": self.expected_top1_kind,
             "curated": self.curated,
             "ground_truth_repair": self.ground_truth_repair,
             "notes": self.notes,
+            "patchable": self.patchable,
+            "expected_patched_source": self.expected_patched_source,
         }
 
 
@@ -122,6 +165,10 @@ class BenchmarkSuite:
 
     def curated_only(self) -> tuple[BenchmarkCase, ...]:
         return tuple(c for c in self.cases if c.curated)
+
+    def negative_controls(self) -> tuple[BenchmarkCase, ...]:
+        """Return cases where the correct behavior is to avoid diagnosis."""
+        return tuple(c for c in self.cases if not c.expected_error_family)
 
     def families(self) -> frozenset[str]:
         return frozenset(c.error_family for c in self.cases)
@@ -148,11 +195,18 @@ _CASES: list[BenchmarkCase] = [
             '    result = calculat(10)\n'
             "NameError: name 'calculat' is not defined"
         ),
-        source_snippet="def calculate(x):\n    return x * 2\nresult = calculat(10)\n",
+        source_snippet=(
+            "def calculate(x):\n    return x * 2\n\n\nresult = calculat(10)\n"
+        ),
+        source_path="app.py",
         expected_error_family="name_error",
         expected_top1_kind="name_error",
         curated=True,
         ground_truth_repair="Rename call from 'calculat' to 'calculate'",
+        patchable=True,
+        expected_patched_source=(
+            "def calculate(x):\n    return x * 2\n\n\nresult = calculate(10)\n"
+        ),
     ),
     BenchmarkCase(
         case_id="py-name-002",
@@ -164,11 +218,14 @@ _CASES: list[BenchmarkCase] = [
             '    print(mesage)\n'
             "NameError: name 'mesage' is not defined"
         ),
-        source_snippet="message = 'hello'\nprint(mesage)\n",
+        source_snippet="message = 'hello'\n\nprint(mesage)\n",
+        source_path="main.py",
         expected_error_family="name_error",
         expected_top1_kind="name_error",
         curated=True,
         ground_truth_repair="Rename 'mesage' to 'message'",
+        patchable=True,
+        expected_patched_source="message = 'hello'\n\nprint(message)\n",
     ),
     BenchmarkCase(
         case_id="py-name-003",
@@ -196,11 +253,28 @@ _CASES: list[BenchmarkCase] = [
             '    resp = Respose(200)\n'
             "NameError: name 'Respose' is not defined"
         ),
-        source_snippet="class Response:\n    def __init__(self, code): self.code = code\ndef handler():\n    resp = Respose(200)\n",
+        source_snippet=(
+            "class Response:\n"
+            "    def __init__(self, code): self.code = code\n"
+            "\n\n\n\n\n\n\n"
+            "def handler():\n"
+            "\n"
+            "    resp = Respose(200)\n"
+        ),
+        source_path="server.py",
         expected_error_family="name_error",
         expected_top1_kind="name_error",
         curated=True,
         ground_truth_repair="Rename 'Respose' to 'Response'",
+        patchable=True,
+        expected_patched_source=(
+            "class Response:\n"
+            "    def __init__(self, code): self.code = code\n"
+            "\n\n\n\n\n\n\n"
+            "def handler():\n"
+            "\n"
+            "    resp = Response(200)\n"
+        ),
     ),
     BenchmarkCase(
         case_id="py-name-005",
@@ -212,11 +286,16 @@ _CASES: list[BenchmarkCase] = [
             '    TIMEOUT = DEFALT_TIMEOUT\n'
             "NameError: name 'DEFALT_TIMEOUT' is not defined"
         ),
-        source_snippet="DEFAULT_TIMEOUT = 30\nTIMEOUT = DEFALT_TIMEOUT\n",
+        source_snippet="DEFAULT_TIMEOUT = 30\n\n\nTIMEOUT = DEFALT_TIMEOUT\n",
+        source_path="config.py",
         expected_error_family="name_error",
         expected_top1_kind="name_error",
         curated=True,
         ground_truth_repair="Rename 'DEFALT_TIMEOUT' to 'DEFAULT_TIMEOUT'",
+        patchable=True,
+        expected_patched_source=(
+            "DEFAULT_TIMEOUT = 30\n\n\nTIMEOUT = DEFAULT_TIMEOUT\n"
+        ),
     ),
     BenchmarkCase(
         case_id="py-name-006",
@@ -930,6 +1009,112 @@ _CASES: list[BenchmarkCase] = [
         expected_top1_kind="typescript_type_mismatch",
         curated=True,
         ground_truth_repair="Map to strings: join([1,2,3].map(String))",
+    ),
+    # -----------------------------------------------------------------------
+    # Negative controls — 9 benign observations across both languages.
+    # The nominal family only balances suite coverage; it is never passed to
+    # the analyzer because these cases have no expected diagnostic family.
+    # -----------------------------------------------------------------------
+    BenchmarkCase(
+        case_id="neg-py-001",
+        language="python",
+        error_family="name_error",
+        error_text="Application startup completed successfully in 18 ms.",
+        source_snippet="status = 'ready'\nprint(status)\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Successful startup log",
+    ),
+    BenchmarkCase(
+        case_id="neg-py-002",
+        language="python",
+        error_family="type_error",
+        error_text="42 tests passed, 3 skipped in 0.81s",
+        source_snippet="def add(left, right):\n    return left + right\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Passing test summary",
+    ),
+    BenchmarkCase(
+        case_id="neg-py-003",
+        language="python",
+        error_family="attribute_error",
+        error_text="DeprecationWarning: legacy_mode will be removed in a future release",
+        source_snippet="class Config:\n    legacy_mode = False\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Non-fatal warning",
+    ),
+    BenchmarkCase(
+        case_id="neg-py-004",
+        language="python",
+        error_family="key_error",
+        error_text="INFO cache miss handled; value populated from local storage",
+        source_snippet="cache = {}\nvalue = cache.get('theme', 'dark')\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Handled cache miss",
+    ),
+    BenchmarkCase(
+        case_id="neg-py-005",
+        language="python",
+        error_family="index_error",
+        error_text="No records matched the filter; returning an empty collection.",
+        source_snippet="records = []\nfirst = records[0] if records else None\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Expected empty result",
+    ),
+    BenchmarkCase(
+        case_id="neg-ts-001",
+        language="typescript",
+        error_family="typescript_missing_symbol",
+        error_text="TypeScript compilation completed with 0 diagnostics.",
+        source_snippet="const greeting: string = 'hello';\nconsole.log(greeting);\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Clean compiler result",
+    ),
+    BenchmarkCase(
+        case_id="neg-ts-002",
+        language="typescript",
+        error_family="typescript_type_mismatch",
+        error_text="Bundler emitted 12 modules in 94 ms.",
+        source_snippet="const moduleCount: number = 12;\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Successful build log",
+    ),
+    BenchmarkCase(
+        case_id="neg-ts-003",
+        language="typescript",
+        error_family="async_error",
+        error_text="Request completed with status 204; no response body expected.",
+        source_snippet=(
+            "async function ping(): Promise<void> { return undefined; }\n"
+        ),
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Successful no-content response",
+    ),
+    BenchmarkCase(
+        case_id="neg-ts-004",
+        language="typescript",
+        error_family="import_error",
+        error_text="Resolved local module './config' from the project cache.",
+        source_snippet="const config = { enabled: true };\nexport default config;\n",
+        expected_error_family="",
+        expected_top1_kind="",
+        curated=False,
+        notes="Successful local resolution",
     ),
 ]
 

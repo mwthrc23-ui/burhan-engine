@@ -5,7 +5,9 @@ Provides a reproducible benchmark suite and runner to measure:
 - Top-1 and Top-3 diagnostic success rates
 - False positive rate
 - Analysis latency
-- Patch pass rates (narrow test + full regression)
+- Exact ground-truth patch success inside temporary projects
+- Patch false-positive rate on negative controls
+- Composite release-gate status
 """
 
 from .suite import BenchmarkCase, BenchmarkSuite, load_suite

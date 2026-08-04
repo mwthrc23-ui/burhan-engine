@@ -5,6 +5,7 @@ satisfy all assertions.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -108,6 +109,28 @@ class TestBenchmarkSuite:
         }
         assert set(d.keys()) >= expected_keys
 
+    def test_suite_has_diverse_explicit_negative_controls(self) -> None:
+        suite = load_suite()
+        controls = suite.negative_controls()
+
+        assert 8 <= len(controls) <= 10
+        assert {case.language for case in controls} == {"python", "typescript"}
+        assert len({case.error_text for case in controls}) == len(controls)
+        for case in controls:
+            assert case.expected_error_family == ""
+            assert case.expected_top1_kind == ""
+            assert case.curated is False
+            assert case.patchable is False
+
+    def test_suite_declares_multiple_patchable_ground_truth_cases(self) -> None:
+        cases = [case for case in load_suite().cases if case.patchable]
+
+        assert len(cases) >= 4
+        assert all(case.language == "python" for case in cases)
+        assert all(case.curated for case in cases)
+        assert all(case.source_path.endswith(".py") for case in cases)
+        assert all(case.expected_patched_source for case in cases)
+
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -120,6 +143,18 @@ class TestBenchmarkRunner:
         assert not [case for case in result.case_results if case.error]
         assert result.diagnostic_accuracy >= 0.90
         assert result.top1_success >= 0.90
+        assert result.negative_control_cases >= 8
+        assert result.false_positive_rate <= 0.10
+        assert result.patch_attempted_cases >= 4
+        assert result.patch_success_rate >= 0.90
+        assert result.patch_negative_control_cases >= 8
+        assert result.patch_false_positive_cases == 0
+        assert result.patch_false_positive_rate == 0.0
+        assert result.passes_release_gate is True
+        assert replace(result, diagnostic_accuracy=0.89).passes_release_gate is False
+        assert replace(result, false_positive_rate=0.11).passes_release_gate is False
+        assert replace(result, patch_success_rate=0.89).passes_release_gate is False
+        assert replace(result, patch_false_positive_cases=1).passes_release_gate is False
 
     def test_runner_produces_benchmark_result(self) -> None:
         runner = BenchmarkRunner()
@@ -155,14 +190,16 @@ class TestBenchmarkRunner:
             "top1_success",
             "top3_success",
             "false_positive_rate",
+            "patch_success_rate",
+            "patch_false_positive_rate",
         ):
             value = getattr(result, attr)
             assert 0.0 <= value <= 1.0, f"{attr} = {value} out of [0, 1]"
 
-    def test_default_suite_does_not_claim_false_positive_measurement(self) -> None:
+    def test_default_suite_reports_measured_false_positive_rate(self) -> None:
         result = BenchmarkRunner().run()
-        assert result.negative_control_cases == 0
-        assert "n/a" in "\n".join(result.summary_lines())
+        assert result.negative_control_cases >= 8
+        assert "n/a" not in "\n".join(result.summary_lines())
 
     def test_mean_latency_non_negative(self) -> None:
         runner = BenchmarkRunner()
@@ -176,6 +213,10 @@ class TestBenchmarkRunner:
         expected_keys = {
             "total_cases", "curated_cases", "diagnostic_accuracy",
             "top1_success", "top3_success", "false_positive_rate",
+            "patch_attempted_cases", "patch_success_cases",
+            "patch_success_rate", "passes_release_gate",
+            "patch_negative_control_cases", "patch_false_positive_cases",
+            "patch_false_positive_rate",
             "mean_latency_ms", "families_covered", "case_results",
         }
         assert set(d.keys()) >= expected_keys
@@ -188,6 +229,8 @@ class TestBenchmarkRunner:
         expected_keys = {
             "case_id", "top1_kind", "top3_kinds", "expected_kind",
             "correct_top1", "correct_top3", "is_false_positive",
+            "patch_attempted", "patch_succeeded", "patch_error",
+            "is_patch_false_positive",
             "elapsed_ms", "error",
         }
         assert set(d.keys()) >= expected_keys
@@ -277,3 +320,125 @@ class TestBenchmarkRunner:
         assert result.false_positive_rate == 1.0
         assert result.negative_control_cases == 1
         assert result.case_results[0].is_false_positive is True
+
+    def test_negative_control_uses_neutral_goal(self) -> None:
+        """The runner must not leak the nominal family into control prompts."""
+        from unittest.mock import MagicMock
+
+        case = BenchmarkCase(
+            case_id="neutral-control",
+            language="python",
+            error_family="import_error",
+            error_text="Service startup completed successfully in 12 ms.",
+            source_snippet="print('ready')\n",
+            expected_error_family="",
+            expected_top1_kind="",
+            curated=False,
+        )
+        mock_analyzer = MagicMock()
+        mock_analyzer.analyze.return_value = SimpleNamespace(hypotheses=())
+
+        BenchmarkRunner(
+            analyzer=mock_analyzer,
+            suite=BenchmarkSuite(cases=(case,)),
+        ).run()
+
+        goal = mock_analyzer.analyze.call_args.kwargs["goal"]
+        assert goal == "Assess the project evidence without assuming an error."
+        assert case.error_family not in goal
+
+    def test_patch_metrics_use_real_patch_engine_preview(self) -> None:
+        case = BenchmarkCase(
+            case_id="patchable-name",
+            language="python",
+            error_family="name_error",
+            error_text=(
+                'Traceback (most recent call last):\n'
+                '  File "app.py", line 5, in run\n'
+                '    return grete("Ada")\n'
+                "NameError: name 'grete' is not defined"
+            ),
+            source_snippet=(
+                "def greet(name):\n"
+                "    return f'Hi {name}'\n"
+                "\n"
+                "def run():\n"
+                "    return grete('Ada')\n"
+            ),
+            source_path="app.py",
+            expected_error_family="name_error",
+            expected_top1_kind="name_error",
+            curated=True,
+            ground_truth_repair="Rename grete to greet",
+            expected_patched_source=(
+                "def greet(name):\n"
+                "    return f'Hi {name}'\n"
+                "\n"
+                "def run():\n"
+                "    return greet('Ada')\n"
+            ),
+            patchable=True,
+        )
+
+        result = BenchmarkRunner(suite=BenchmarkSuite(cases=(case,))).run()
+
+        assert result.patch_attempted_cases == 1
+        assert result.patch_success_cases == 1
+        assert result.patch_success_rate == 1.0
+        assert result.case_results[0].patch_attempted is True
+        assert result.case_results[0].patch_succeeded is True
+        assert result.case_results[0].patch_error == ""
+
+    def test_patch_success_requires_exact_ground_truth_source(self) -> None:
+        case = next(case for case in load_suite().cases if case.patchable)
+        wrong_ground_truth = replace(
+            case,
+            expected_patched_source="# not the expected repaired program\n",
+        )
+
+        result = BenchmarkRunner(
+            suite=BenchmarkSuite(cases=(wrong_ground_truth,)),
+        ).run()
+
+        assert result.patch_attempted_cases == 1
+        assert result.patch_success_cases == 0
+        assert result.patch_success_rate == 0.0
+        assert result.case_results[0].patch_succeeded is False
+        assert "ground truth" in result.case_results[0].patch_error
+
+    def test_patch_false_positive_rate_counts_generated_control_patch(self) -> None:
+        from unittest.mock import MagicMock
+
+        control = BenchmarkCase(
+            case_id="patch-fp-control",
+            language="python",
+            error_family="name_error",
+            error_text="Application completed successfully.",
+            source_snippet="print('ok')\n",
+            source_path="app.py",
+            expected_error_family="",
+            expected_top1_kind="",
+            curated=False,
+        )
+        hypothesis = SimpleNamespace(kind="undefined_name", confidence=0.9)
+        analyzer = MagicMock()
+        analyzer.analyze.return_value = SimpleNamespace(hypotheses=(hypothesis,))
+        patch_engine = MagicMock()
+        patch_engine.repair.return_value = SimpleNamespace(
+            diff="--- a/app.py\n+++ b/app.py\n",
+            changed_files=("app.py",),
+            applied=True,
+        )
+
+        result = BenchmarkRunner(
+            analyzer=analyzer,
+            patch_engine=patch_engine,
+            suite=BenchmarkSuite(cases=(control,)),
+        ).run()
+
+        assert result.patch_negative_control_cases == 1
+        assert result.patch_false_positive_cases == 1
+        assert result.patch_false_positive_rate == 1.0
+        assert result.case_results[0].is_patch_false_positive is True
+        patch_engine.repair.assert_called_once()
+        assert patch_engine.repair.call_args.kwargs["apply"] is True

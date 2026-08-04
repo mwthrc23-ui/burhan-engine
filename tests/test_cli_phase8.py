@@ -223,7 +223,7 @@ class BackwardCompatibilityTests(unittest.TestCase):
     def test_version_flag(self) -> None:
         _, stdout, stderr = _run(["--version"])
         combined = stdout + stderr
-        self.assertIn("0.9.0", combined)
+        self.assertIn("0.10.0", combined)
 
     def test_memory_promote_still_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

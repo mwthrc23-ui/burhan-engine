@@ -21,12 +21,12 @@ def _make_cert(
     test_after_exit: int | None = 0,
 ) -> ProofCertificateV3:
     provenance = ProvenanceV3(
-        engine_version="0.9.0",
+        engine_version="0.10.0",
         policy_version="v3",
         issued_at_utc="2026-08-04T00:00:00Z",
         issuer="burhan-engine",
         sbom=(
-            SBOMEntry(name="burhan-engine", version="0.9.0", ecosystem="pip", license_spdx="LicenseRef-Custom-Attribution"),
+            SBOMEntry(name="burhan-engine", version="0.10.0", ecosystem="pip", license_spdx="LicenseRef-Custom-Attribution"),
         ),
     )
     before = (
@@ -139,7 +139,7 @@ class TestProofCertificateV3:
     def test_provenance_to_dict(self) -> None:
         cert = _make_cert()
         prov = cert.provenance.to_dict()
-        assert prov["engine_version"] == "0.9.0"
+        assert prov["engine_version"] == "0.10.0"
         assert prov["policy_version"] == "v3"
         assert isinstance(prov["sbom"], list)
 
