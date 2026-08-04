@@ -187,6 +187,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="افحص توفر Docker والأدوات والصور والسياسات قبل بدء الإثبات",
     )
     doctor.add_argument("--json", action="store_true", help="أخرج نتيجة الفحص بصيغة JSON")
+
+    benchmark = subcommands.add_parser(
+        "benchmark",
+        help="شغّل مجموعة البنشمارك وأخرج مقاييس التشخيص والإصلاح",
+    )
+    benchmark.add_argument("--json", action="store_true", help="أخرج النتائج بصيغة JSON")
+    benchmark.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="اعرض ملخصًا فقط بدون تفاصيل كل حالة",
+    )
     return parser
 
 
@@ -255,6 +266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _source_search(args)
     if args.command == "doctor":
         return _doctor(args)
+    if args.command == "benchmark":
+        return _benchmark(args)
     if args.command == "code-tree":
         return _code_tree(args)
     if args.command == "repair-proof":
@@ -925,6 +938,38 @@ def _doctor(args: argparse.Namespace) -> int:
             print("  تحذير: بعض المكونات غير جاهزة - تحقق من إعداد البيئة.")
 
     return 0 if all_ok else 1
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    """Run the benchmark suite and report metrics."""
+    try:
+        from .benchmark.runner import BenchmarkRunner
+        runner = BenchmarkRunner()
+        result = runner.run()
+    except Exception as exc:
+        print(f"خطأ في البنشمارك: {exc}", file=sys.stderr)
+        return 2
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        for line in result.summary_lines():
+            print(_terminal_text(line))
+        if not getattr(args, "summary_only", False):
+            print()
+            failed = [r for r in result.case_results if not r.correct_top1 and not r.error]
+            errors = [r for r in result.case_results if r.error]
+            if failed:
+                print(f"حالات فاشلة في Top-1 ({len(failed)}):")
+                for r in failed[:10]:
+                    print(f"  [{r.case_id}] expected={r.expected_kind} got={r.top1_kind or 'none'}")
+            if errors:
+                print(f"حالات خطأ ({len(errors)}):")
+                for r in errors[:5]:
+                    print(f"  [{r.case_id}] {r.error[:80]}")
+
+    # Exit 0 if top-1 >= 50%, else 1 (useful for CI)
+    return 0 if result.top1_success >= 0.50 else 1
 
 
 def _print_explain(result: object, patch: object | None) -> None:
