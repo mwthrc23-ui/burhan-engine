@@ -13,3 +13,57 @@ Report them privately through
 Include the affected version, reproduction steps, impact, and any suggested
 mitigation. Do not include real credentials, private source code, or sensitive
 project data. You should receive an initial response within seven days.
+
+## Isolation and sandbox policies
+
+Burhan Engine applies several layers of protection when running proofs:
+
+* **Docker image pinning** – all Docker images must be referenced by
+  `image@sha256:<64-hex>` digest.  Images without a pinned digest are rejected
+  before any container is started.
+* **Network isolation** – containers run with `--network none` by default.
+  Network access requires an explicit policy override.
+* **Read-only source mount** – the project directory is mounted read-only inside
+  the container; only a temporary copy is writable.
+* **Capability dropping** – Linux capabilities are dropped in all proof
+  containers.
+* **Resource limits** – CPU, memory, and process limits are enforced per run.
+* **Symlink and overwrite protection** – report files are written atomically.
+  Writing to an existing file or through a symlink is rejected.
+
+## Secret file protection
+
+The scanner and patcher never read, log, or transmit the contents of:
+
+* `.env` and `.env.*` files
+* `credentials.json`, `secrets.json`, `service-account.json`
+* Private key files: `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, `*.p12`, `*.pfx`
+
+These files are skipped silently; a count of skipped files appears in the
+analysis result but their content is never accessed.
+
+## Memory and proof trust levels
+
+Repair memory entries are classified by trust level:
+
+| Level | Meaning |
+|-------|---------|
+| `raw_source` | Imported from external dataset; not locally verified |
+| `unverified_local` | Proposed by the engine; not yet proven by tests |
+| `locally_proven` | Proven by a genuine fail→pass cycle inside Docker |
+| `human_reviewed` | Additionally reviewed and approved by a human operator |
+
+The `memory-promote` gate is fail-closed: it does not accept a
+`ProofResult` supplied by the user as evidence.  The engine must re-run the
+proof itself.
+
+## Optional intelligence provider
+
+The intelligence provider subsystem is disabled by default.  When enabled:
+
+* No raw source code is sent to external services.
+* External calls require explicit `--allow-external-ai` consent.
+* All LLM output is classified as `ASSUMED` trust and must be validated by
+  the engine's own tools before use.
+* The provider cannot override sandbox or scope policies.
+

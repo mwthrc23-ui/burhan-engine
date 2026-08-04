@@ -6,6 +6,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -14,6 +15,37 @@ MVP_DOMAIN = "python-pytest-attribute-error"
 ATTRIBUTE_ERROR = re.compile(
     r"AttributeError:\s+['\"](?P<object_type>[^'\"]+)['\"] object has no attribute ['\"](?P<attribute>[^'\"]+)['\"]"
 )
+
+
+class TrustLevel(StrEnum):
+    """Four-tier trust classification for repair memory entries.
+
+    Levels (ascending trust)
+    -------------------------
+    RAW_SOURCE:
+        Data imported from an external dataset; not locally verified.
+    UNVERIFIED_LOCAL:
+        A candidate proposed by the engine but not yet proven by a test run.
+    LOCALLY_PROVEN:
+        Proven by a genuine fail-before / pass-after cycle inside Burhan's
+        own Docker sandbox.
+    HUMAN_REVIEWED:
+        Additionally reviewed and approved by a human operator.
+    """
+
+    RAW_SOURCE = "raw_source"
+    UNVERIFIED_LOCAL = "unverified_local"
+    LOCALLY_PROVEN = "locally_proven"
+    HUMAN_REVIEWED = "human_reviewed"
+
+    @classmethod
+    def minimum_for_retrieval(cls) -> TrustLevel:
+        """Minimum trust level for a memory entry to be returned in searches."""
+        return cls.RAW_SOURCE  # Searching always works; callers decide how to weight.
+
+    def is_proven(self) -> bool:
+        """Return True if this level represents a locally-proven or better entry."""
+        return self in (TrustLevel.LOCALLY_PROVEN, TrustLevel.HUMAN_REVIEWED)
 
 
 @dataclass(frozen=True, slots=True)
