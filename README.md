@@ -78,10 +78,10 @@ docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.8.1
 docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.8.1 --version
 ```
 
-بعد النشر، اعرض بصمة الإصدار `0.8.1` غير القابلة للتبدل بالأمر:
+البصمة المنشورة للإصدار `0.8.1` هي:
 
 ```text
-docker buildx imagetools inspect ghcr.io/mwthrc23-ui/burhan-engine:0.8.1
+ghcr.io/mwthrc23-ui/burhan-engine@sha256:b7c0c7c13da511eeffb29df9eee75dd14178a346b72737e2136f7bf489b898a1
 ```
 
 استخدم مرجع البصمة بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
