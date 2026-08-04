@@ -21,7 +21,7 @@ burhan --help
 
 [PyPI](https://pypi.org/project/burhan-engine/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Releases](https://github.com/mwthrc23-ui/burhan-engine/releases) · [License](LICENSE) · [Security policy](SECURITY.md)
 
-هذه النسخة `0.7.1` توفر **Burhan Evidence Gate**: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
+هذه النسخة `0.8.0` توفر **Burhan Evidence Gate**: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
 
 حقوق النشر © 2026 مساهمو Burhan Engine. بُرهان برنامج حر ومفتوح المصدر مرخص بموجب `AGPL-3.0-only`. إذا وزعت نسخة معدلة، أو أتحت نسخة معدلة ليتفاعل معها المستخدمون عبر شبكة، فيجب أن تتيح لهم المصدر المقابل لتلك النسخة وفق شروط [الترخيص](LICENSE).
 
@@ -66,13 +66,13 @@ burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" -
 اسحب الصورة المنشورة:
 
 ```bash
-docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.7.1
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.8.0
 ```
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.7.1 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.8.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -114,7 +114,7 @@ burhan ci-gate \
   env:
     BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
   run: |
-    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.7.1"
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.8.0"
     docker pull "$BURHAN_DOCKER_IMAGE"
 - name: Load protected Burhan policy
   env:
@@ -431,6 +431,57 @@ python -m unittest discover -s tests -v
 2. إعادة نتيجة الاختبار إلى BIR كدليل جديد قابل للاسترجاع.
 3. بناء صورة تحقق pytest مثبتة بالاعتماديات وdigest.
 4. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+
+## ما الجديد في 0.8.0
+
+### Evidence Graph V2
+
+رسم بياني ثابت للأدلة (`EvidenceGraph`) يصنّف كل حقيقة إلى إحدى ثلاث فئات: `CONFIRMED` (ملاحظ مباشر)، أو `INFERRED` (مستنتج من الكود)، أو `ASSUMED` (محتمل لم يتحقق). للعُقد والحواف والحقائق بصمات SHA-256 وschema ثابت.
+
+### الفهرسة الدلالية
+
+- `index/python_indexer.py`: فهرسة كاملة لملفات Python.
+- `index/typescript_indexer.py`: فهرسة TypeScript بوضع Regex مخفَّض (بدون Tree-sitter).
+- واجهة موحدة في `index/base.py`.
+
+### فرضيات متعددة المرشحين
+
+`diagnosis/hypothesis_engine.py` يولّد فرضيات متعددة للسبب الجذري ويرتبها حسب الأدلة.
+
+### مرشحو الإصلاح
+
+`candidates/repair_candidates.py` يولّد مرشحين للإصلاح ويختار أصغر تغيير ناجح.
+
+### البيئة التجريبية وحلقة الإصلاح
+
+- `sandbox/sandbox_runner.py` يرفض صور Docker غير المثبتة بـdigest ويكشف تغيّر المشروع بين التحليل والإثبات.
+- `verification/repair_loop.py` يشغّل حلقة إصلاح محدودة (لا تتجاوز حدًا مضبوطًا من المحاولات).
+
+### تقارير SARIF 2.1.0
+
+`reports/sarif_reporter.py` يصدر SARIF 2.1.0 مع منع الكتابة فوق ملف موجود أو عبر symlink.
+
+### مزود المعلومات الاستخباراتية
+
+- `intelligence/local_provider.py`: مزود محلي لا يحتاج اتصالاً خارجيًا.
+- `intelligence/llm_provider.py`: stub اختياري لمزود LLM — **معطل افتراضيًا وغير مكتمل التكامل**.
+- المحرك يستمر بشكل طبيعي عند تعطل أي مزود.
+
+### مستويات الثقة (TrustLevel)
+
+أربع مراتب: `raw_source` / `unverified_local` / `locally_proven` / `human_reviewed`.
+
+### أمر `burhan doctor`
+
+يفحص توفر Python وDocker والصور والإصدارات ويعرض النتيجة نصًا أو JSON.
+
+### الاختبارات والتغطية
+
+366 اختبارًا ناجحًا (مع 18 subtest)، تغطية 88%.
+
+### ملاحظة
+
+أمر `memory-promote` ما زال معطلًا في هذا الإصدار. مزود LLM stub ليس تكاملًا مكتملًا.
 
 ## الأوامر الجديدة (v0.8.0)
 
