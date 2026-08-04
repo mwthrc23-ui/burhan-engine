@@ -79,6 +79,38 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
             r"^FROM python:3\.12-slim@sha256:[0-9a-f]{64}$",
         )
 
+    def test_pytest_proof_image_is_reproducibly_pinned(self) -> None:
+        project = Path(__file__).parents[1]
+        dockerfile = (project / "docker" / "Dockerfile.pytest").read_text(
+            encoding="utf-8"
+        )
+        requirements = (project / "docker" / "pytest-requirements.txt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertRegex(
+            dockerfile.splitlines()[0],
+            r"^FROM python:3\.12-slim@sha256:[0-9a-f]{64}$",
+        )
+        self.assertIn("--require-hashes", dockerfile)
+        self.assertIn("pytest==9.1.1", requirements)
+        for line in requirements.splitlines():
+            if line and not line.startswith((" ", "#", "--hash")):
+                self.assertRegex(line, r"^[a-zA-Z0-9_.-]+==[^ ]+ \\$")
+        self.assertGreaterEqual(requirements.count("--hash=sha256:"), 5)
+
+    def test_proof_image_workflow_publishes_with_job_scoped_permission(self) -> None:
+        project = Path(__file__).parents[1]
+        workflow = (
+            project / ".github" / "workflows" / "publish-proof-image.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("packages: write", workflow)
+        self.assertIn("docker/Dockerfile.pytest", workflow)
+        self.assertIn("ghcr.io/${{ github.repository_owner }}/burhan-pytest", workflow)
+        self.assertIn("push: true", workflow)
+
     def test_all_workflow_actions_are_pinned_to_commits(self) -> None:
         project = Path(__file__).parents[1]
         workflows = project / ".github" / "workflows"
