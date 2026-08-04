@@ -80,6 +80,21 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
             r"^FROM python:3\.12-slim@sha256:[0-9a-f]{64}$",
         )
 
+    def test_all_workflow_actions_are_pinned_to_commits(self) -> None:
+        project = Path(__file__).parents[1]
+        workflows = project / ".github" / "workflows"
+        workflow_paths = tuple(workflows.glob("*.yml")) + tuple(
+            workflows.glob("*.yaml")
+        )
+        for workflow_path in workflow_paths:
+            workflow = workflow_path.read_text(encoding="utf-8")
+            for action_ref in re.findall(r"uses:\s*([^\s#]+)", workflow):
+                self.assertRegex(
+                    action_ref,
+                    r"^[^@]+@[0-9a-f]{40}$",
+                    f"unpinned action in {workflow_path.name}: {action_ref}",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
