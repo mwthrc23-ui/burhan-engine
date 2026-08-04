@@ -29,7 +29,7 @@ class CliTests(unittest.TestCase):
             exit_code = main(["--version"])
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("burhan 0.9.0", output.getvalue())
+        self.assertIn("burhan 0.10.0", output.getvalue())
 
     def test_public_version_sources_are_consistent(self) -> None:
         project = Path(__file__).resolve().parents[1]
@@ -43,8 +43,8 @@ class CliTests(unittest.TestCase):
         self.assertIn(f"`{package_version}`", readme)
 
     def test_release_version_is_090(self) -> None:
-        """All version sources must agree and equal the current release: 0.9.0."""
-        EXPECTED = "0.9.0"
+        """All version sources must agree and equal the current release: 0.10.0."""
+        EXPECTED = "0.10.0"
         project = Path(__file__).resolve().parents[1]
         package_version = tomllib.loads(
             (project / "pyproject.toml").read_text(encoding="utf-8")
@@ -60,21 +60,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(burhan.__version__, EXPECTED, f"burhan.__version__ is {burhan.__version__!r}, expected {EXPECTED!r}")
 
     def test_version_flag_matches_release_090(self) -> None:
-        """burhan --version must output 0.9.0."""
+        """burhan --version must output 0.10.0."""
         import io
         from contextlib import redirect_stdout
         output = io.StringIO()
         with redirect_stdout(output):
             main(["--version"])
-        self.assertIn("0.9.0", output.getvalue())
+        self.assertIn("0.10.0", output.getvalue())
 
     def test_doctor_json_version_matches_release_090(self) -> None:
-        """burhan doctor --json must report burhan_version = 0.9.0."""
+        """burhan doctor --json must report burhan_version = 0.10.0."""
         output = io.StringIO()
         with redirect_stdout(output):
             main(["doctor", "--json"])
         payload = json.loads(output.getvalue())
-        self.assertEqual(payload["checks"]["burhan_version"], "0.9.0")
+        self.assertEqual(payload["checks"]["burhan_version"], "0.10.0")
 
     def test_analyze_command_outputs_machine_readable_bir_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -259,13 +259,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(prove.call_args.kwargs["docker_image"], proof_image)
 
-    def test_repair_proof_rejects_placeholder_pytest_docker_image(self) -> None:
+    def test_repair_proof_uses_published_pytest_digest_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "main.py").write_text("def message():\n    return 'ok'\n\nprint(mesage())\n", encoding="utf-8")
-            stderr = io.StringIO()
-
-            with redirect_stderr(stderr):
+            with patch(
+                "burhan.cli.ProofRunner.prove", side_effect=RuntimeError("stop")
+            ) as prove:
                 exit_code = main(
                     [
                         "repair-proof",
@@ -284,7 +284,11 @@ class CliTests(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("صورة pytest مثبتة", stderr.getvalue())
+        self.assertEqual(
+            prove.call_args.kwargs["docker_image"],
+            "ghcr.io/mwthrc23-ui/burhan-pytest@sha256:"
+            "45181883b866f80ef1f3d1dc00661148eaf6b2e3715d0b7592d8905fd5221280",
+        )
 
     def test_memory_add_rejects_user_supplied_episode(self) -> None:
         from tests.test_memory import episode_payload

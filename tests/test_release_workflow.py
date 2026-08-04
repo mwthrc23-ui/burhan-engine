@@ -94,6 +94,7 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         )
         self.assertIn("--require-hashes", dockerfile)
         self.assertIn("pytest==9.1.1", requirements)
+        self.assertIn("pygments==2.20.0", requirements)
         for line in requirements.splitlines():
             if line and not line.startswith((" ", "#", "--hash")):
                 self.assertRegex(line, r"^[a-zA-Z0-9_.-]+==[^ ]+ \\$")
@@ -110,6 +111,15 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         self.assertIn("docker/Dockerfile.pytest", workflow)
         self.assertIn("ghcr.io/${{ github.repository_owner }}/burhan-pytest", workflow)
         self.assertIn("push: true", workflow)
+
+    def test_ci_builds_and_smokes_the_pytest_proof_image(self) -> None:
+        project = Path(__file__).parents[1]
+        workflow = (project / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("docker/Dockerfile.pytest", workflow)
+        self.assertIn("pytest --version", workflow)
 
     def test_all_workflow_actions_are_pinned_to_commits(self) -> None:
         project = Path(__file__).parents[1]

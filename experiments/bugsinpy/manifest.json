@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "name": "BugsInPy",
+    "repository": "https://github.com/soarsmu/BugsInPy",
+    "commit": "11c5f1eea954a42132cfd06bf257766a7963e0fd",
+    "license_status": "no repository-level license file in the pinned checkout"
+  },
+  "subject": {
+    "repository": "https://github.com/ytdl-org/youtube-dl",
+    "project": "youtube-dl",
+    "license": "Unlicense"
+  },
+  "runtime_image": "python@sha256:b53f496ca43e5af6994f8e316cf03af31050bf7944e0e4a308ad86c001cf028b",
+  "cases": [
+    {
+      "id": "youtube-dl-1",
+      "bug_id": "1",
+      "buggy_commit": "99036a1298089068dcf80c0985bfcc3f8c24f281",
+      "declared_command": "python -m unittest -q test.test_utils.TestUtil.test_match_str",
+      "test_args": ["-m", "unittest", "-q", "test.test_utils.TestUtil.test_match_str"],
+      "sha256": {
+        "bug.info": "4271822e7deda3e9a5ae0c00768d8f6d3ab91e33f6d1f5e777f68b2016fffab5",
+        "bug_patch.txt": "6a13d50ef3534c861634944c27bb11deb65b283d4d23fedbd6ddade58e2f0054",
+        "run_test.sh": "68117fdb3d19a1510e4ccfae5ba15d2445fbb0995d9d557036a907d0109b25d5"
+      }
+    },
+    {
+      "id": "youtube-dl-2",
+      "bug_id": "2",
+      "buggy_commit": "84f085d4bdb66ee025fb337bcd571eab7469da97",
+      "fixed_commit": "9d6ac71c27b1dfb662c795ef598dbfd0286682da",
+      "fixed_test_fixture": {
+        "path": "test/test_InfoExtractor.py",
+        "sha256": "a9078e7547b5c5c596dc0473eba42906341c27ec83bd82bae45658d6fbdbaf08"
+      },
+      "declared_command": "python -m unittest -q test.test_InfoExtractor.TestInfoExtractor.test_parse_mpd_formats",
+      "test_args": ["-m", "unittest", "-q", "test.test_InfoExtractor.TestInfoExtractor.test_parse_mpd_formats"],
+      "sha256": {
+        "bug.info": "34b61d5f3ed06db0ded22c0450d1fbb0624561a5d4a8ec114096c1dc1a70689f",
+        "bug_patch.txt": "525d0d68504ab2d9405db91576626181d701e263c550e2cf8534dd40a5da62ba",
+        "run_test.sh": "ef0bcc75d8010747187ecc5bc5665b507c18aeb575381d6a3e17a0d026d6897a"
+      }
+    },
+    {
+      "id": "youtube-dl-3",
+      "bug_id": "3",
+      "buggy_commit": "f5469da9e6e259c1690c7ef54f1da1c19f65036f",
+      "declared_command": "python -m unittest -q test.test_utils.TestUtil.test_unescape_html",
+      "test_args": ["-m", "unittest", "-q", "test.test_utils.TestUtil.test_unescape_html"],
+      "sha256": {
+        "bug.info": "0f4b4ad94adf577627c151fe23b9e77b0ee17319a8008d64c364bb16fc43012a",
+        "bug_patch.txt": "150aa16c7ed0c262552614feecd3ab340a187e904b3704b303dc772eae84fba8",
+        "run_test.sh": "b92f4d65b5d9db58fe6b0102c2ee2fad227ec6f5411adc5760bab6e83376130f"
+      }
+    },
+    {
+      "id": "youtube-dl-12",
+      "bug_id": "12",
+      "buggy_commit": "435e382423f860aca82a58d7c3db58cbfa242b40",
+      "declared_command": "python -m unittest -q test.test_YoutubeDL.TestFormatSelection.test_format_selection_string_ops",
+      "test_args": ["-m", "unittest", "-q", "test.test_YoutubeDL.TestFormatSelection.test_format_selection_string_ops"],
+      "sha256": {
+        "bug.info": "f5a0347f1deebb3b82213d8a11e4b275981ae819c16abe909ee6f2ea6092ce7a",
+        "bug_patch.txt": "610540bd3ff3f1d8cc5afa0643bef6fe527a99d19c81f79f012964277e020b68",
+        "run_test.sh": "f1b85b9de1cf9bfb2d152d8d8cf7351163fc6d5c5dec8d2ef91f9d10ca6d188d"
+      }
+    }
+  ]
+}

@@ -15,7 +15,7 @@ from burhan.model_v3 import (
 
 def _provenance() -> ProvenanceV3:
     return ProvenanceV3(
-        engine_version="0.9.0",
+        engine_version="0.10.0",
         policy_version="v3",
         issued_at_utc="2026-08-04T00:00:00Z",
         issuer="burhan-engine",

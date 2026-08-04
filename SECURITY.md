@@ -31,6 +31,23 @@ Burhan Engine applies several layers of protection when running proofs:
 * **Symlink and overwrite protection** – report files are written atomically.
   Writing to an existing file or through a symlink is rejected.
 
+## External patch boundary
+
+`verify-patch` accepts ordinary UTF-8 unified diffs without trusting whether
+they came from Aider, OpenHands, Copilot, or another producer. It rejects
+absolute and parent-traversal paths, secret and excluded files, links and
+reparse points, binary data, renames, copies, metadata changes, file creation
+or deletion, oversized input, ambiguous aliases, and context mismatches. Only
+existing text files inside the temporary proof copy may change. Multi-file
+writes are atomic and roll back on failure; the original project manifest is
+checked again before a success verdict.
+
+External dataset commands are evidence, not executable configuration. Burhan
+never passes a raw BugsInPy `run_test.sh` or SWE-bench command to a shell. A
+reproducible experiment must translate an attested command to an explicit
+allowlisted argument vector, use `shell=False`, and run untrusted project code
+inside the digest-pinned V2 Docker boundary.
+
 ## Secret file protection
 
 The scanner and patcher never read, log, or transmit the contents of:

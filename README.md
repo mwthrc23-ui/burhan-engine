@@ -11,7 +11,7 @@
 بُرهان محرك تشخيص وإثبات إصلاح يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة بدل التخمين.
 
 ```bash
-python -m pip install --upgrade "burhan-engine==0.9.0"
+python -m pip install --upgrade "burhan-engine==0.10.0"
 burhan --version
 burhan doctor
 ```
@@ -20,11 +20,11 @@ burhan doctor
 - ينشئ معاينة إصلاح صغيرة من دون تغيير الأصل افتراضيًا.
 - يثبت انتقال الاختبار من الفشل إلى النجاح داخل Docker مع عزل وحدود موارد.
 
-[PyPI 0.9.0](https://pypi.org/project/burhan-engine/0.9.0/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Release v0.9.0](https://github.com/mwthrc23-ui/burhan-engine/releases/tag/v0.9.0) · [License](LICENSE) · [Security policy](SECURITY.md)
+[PyPI 0.10.0](https://pypi.org/project/burhan-engine/0.10.0/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Release v0.10.0](https://github.com/mwthrc23-ui/burhan-engine/releases/tag/v0.10.0) · [License](LICENSE) · [Security policy](SECURITY.md)
 
-تضيف النسخة `0.9.0` بنشمارك تشخيصيًا قابلًا للتكرار، وفهرسة متزايدة، وعائلات تشخيص أعمق لـKeyError وasync وTypeScript، ونماذج شهادة V3 وحماية إضافية لمدخلات مزود الذكاء. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، ومزود LLM الاختياري ما زال stub معطلًا افتراضيًا.
+تضيف النسخة `0.10.0` تحققًا آمنًا من رقع unified diff الخارجية، وإصلاحات محافظة لعائلات إضافية، ومقاييس فعلية لنجاح الرقع والـfalse-positive مع negative controls، وصورة pytest منشورة مثبتة بـdigest. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، ومزود LLM الاختياري ما زال stub معطلًا افتراضيًا.
 
-هذا المشروع متاح للعرض والاستخدام بشرط الإسناد الواضح — مشغّل بواسطة mwthrc23-ui أو مبني على عمل mwthrc23-ui. الاستخدام التجاري يتطلب إذناً كتابياً. راجع ملف [LICENSE](LICENSE) للتفاصيل الكاملة.
+الإصدار `0.10.0` متاح وفق `LicenseRef-Custom-Attribution`: العرض والاستخدام يتطلبان الإسناد الواضح — مشغّل بواسطة mwthrc23-ui أو مبني على عمل mwthrc23-ui — والاستخدام التجاري يتطلب إذناً كتابياً. الإصدارات المنشورة سابقًا تبقى خاضعة للترخيص المعلن مع كل إصدار؛ لا يغيّر هذا الإصدار شروطها بأثر رجعي. راجع ملف [LICENSE](LICENSE) للنص الحاكم.
 
 حقوق النشر © ٢٠٢٦ mwthrc23-ui. جميع الحقوق محفوظة.
 
@@ -33,15 +33,15 @@ burhan doctor
 ### 1) تثبيت الأداة محليًا (PyPI/Editable)
 
 ```bash
-python -m pip install --upgrade "burhan-engine==0.9.0"
+python -m pip install --upgrade "burhan-engine==0.10.0"
 burhan --version
 burhan doctor
 ```
 
-يجب أن يعرض `burhan --version` القيمة `burhan 0.9.0`. يعرض `doctor` نسخة Python، ووجود Docker CLI، وصيغة تثبيت صورة الإثبات، وحالة المزود المحلي؛ لكنه لا يثبت أن Docker daemon يعمل أو أن الصورة قابلة للسحب. استخدم `docker info` و`docker manifest inspect IMAGE` للتحقق التشغيلي. وللتحقق من الحزمة المنشورة بعيدًا عن ملفات المستودع:
+يجب أن يعرض `burhan --version` القيمة `burhan 0.10.0`. يعرض `doctor` نسخة Python، ووجود Docker CLI، وصيغة تثبيت صورة الإثبات، وحالة المزود المحلي؛ لكنه لا يثبت أن Docker daemon يعمل أو أن الصورة قابلة للسحب. استخدم `docker info` و`docker manifest inspect IMAGE` للتحقق التشغيلي. وللتحقق من الحزمة المنشورة بعيدًا عن ملفات المستودع:
 
 ```bash
-uvx --refresh --from "burhan-engine==0.9.0" burhan --version
+uvx --refresh --from "burhan-engine==0.10.0" burhan --version
 ```
 
 وللتطوير المحلي من المستودع:
@@ -71,19 +71,28 @@ burhan repair --project PATH_TO_PROJECT --goal "أصلح الخطأ بأقل ت�
 burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" --error-file PATH_TO_ERROR.txt --trust-local-tests
 ```
 
+التحقق من رقعة unified diff جاءت من Aider أو OpenHands أو Copilot أو أي مولد آخر لا يثق باسم الأداة؛ يفحص المسارات والسياق ثم يطبق الرقعة داخل نسخة مؤقتة فقط، ويشترط انتقال الاختبار نفسه من الفشل إلى النجاح:
+
+```bash
+burhan verify-patch --project PATH_TO_PROJECT --patch-file candidate.diff \
+  --trust-local-tests --test-program pytest --test-arg=-q --backend docker --json
+```
+
+يدعم `--test-program` القيم `python` و`pytest` و`tsc`. تشغيل `tsc` محليًا يتطلب compiler مثبتًا مسبقًا، وتشغيله داخل Docker يتطلب صورة Node/TypeScript مثبتة بـdigest يمررها المستخدم؛ لا ينزل بُرهان compiler أو حزمًا تلقائيًا.
+
 ### 3) تشغيل عبر Docker بدون إعداد Python محلي
 
 اسحب الصورة المنشورة:
 
 ```bash
-docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.9.0
-docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.9.0 --version
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.10.0
+docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.10.0 --version
 ```
 
-البصمة المنشورة للإصدار `0.9.0` هي:
+صورة pytest المخصصة لإثبات V2 منشورة وجرى التحقق منها بالمرجع غير القابل للتبدل:
 
 ```text
-ghcr.io/mwthrc23-ui/burhan-engine@sha256:b94fc3d82eef711c35753d21a90be325f4d558f0fcf686ebb9a08c6adecc716e
+ghcr.io/mwthrc23-ui/burhan-pytest@sha256:45181883b866f80ef1f3d1dc00661148eaf6b2e3715d0b7592d8905fd5221280
 ```
 
 استخدم مرجع البصمة بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
@@ -91,7 +100,7 @@ ghcr.io/mwthrc23-ui/burhan-engine@sha256:b94fc3d82eef711c35753d21a90be325f4d558f
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.9.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.10.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -126,7 +135,7 @@ burhan ci-gate \
 
 يجب كذلك فصل **أداة بُرهان الموثوقة** عن **المستودع الجاري تحليله**: في workflow المحمي ثبّت نسخة منشورة ومثبتة من `burhan-engine` أو wheel من بناء محمي، ولا تثبّت بُرهان من checkout الخاص بالـPR. في البيئات عالية الحساسية استخدم `--require-hashes` مع بصمة wheel المنشورة.
 
-لا تحتوي حزمة `0.9.0` اعتماديات تشغيل خارجية، لذلك يستخدم المثال التالي `--no-deps`. أعد فحص metadata قبل نسخ هذا الخيار إلى إصدار لاحق؛ لا تستخدمه إذا أضيفت اعتماديات مطلوبة.
+لا تحتوي حزمة `0.10.0` اعتماديات تشغيل خارجية، لذلك يستخدم المثال التالي `--no-deps`. أعد فحص metadata قبل نسخ هذا الخيار إلى إصدار لاحق؛ لا تستخدمه إذا أضيفت اعتماديات مطلوبة.
 
 مثال GitHub Actions مختصر:
 
@@ -135,7 +144,7 @@ burhan ci-gate \
   env:
     BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
   run: |
-    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.9.0"
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.10.0"
     docker pull "$BURHAN_DOCKER_IMAGE"
 - name: Load protected Burhan policy
   env:
@@ -335,6 +344,8 @@ powershell -ExecutionPolicy Bypass -File scripts\try-source-memory.ps1
 
 ترخيص مجموعة البيانات وترخيص المشروع الأصلي حقلا مصدر منفصلان؛ لا يفترض بُرهان أن ترخيص SWE-bench ينطبق على رقعة المستودع الأصلي.
 
+التجربة المستقلة القابلة لإعادة التشغيل موجودة في [`experiments/bugsinpy`](experiments/bugsinpy/README.md). تستخدم أربع حالات مثبتة من BugsInPy، وتتحقق من hashes ولا تنفذ `run_test.sh` الخام. النتيجة المنشورة: نجاح خارجي V2 بمعدل 1/1 على اختبار انحدار upstream مثبت، و0/3 false positives على الضوابط الخارجية.
+
 ## تحليل فقط
 
 يتطلب Python 3.11 أو أحدث.
@@ -414,7 +425,9 @@ python -m coverage run -m pytest -q
 python -m coverage report
 ```
 
-خط الأساس الموثق للإصدار `0.9.0`: **550 اختبارًا ناجحًا**، إضافةً إلى **18 subtest**، وتغطية مصدرية **89%**. يشغّل CI المجموعة الكاملة عبر pytest ويفرض تغطية لا تقل عن 80%، ثم يشغّل بوابة البنشمارك.
+خط الأساس الموثق للإصدار `0.10.0`: **641 اختبارًا ناجحًا** إضافةً إلى **25 subtest**، وتغطية مصدرية **89%**. يشغّل CI المجموعة الكاملة عبر pytest ويفرض تغطية لا تقل عن 80%، ثم يشغّل بوابة البنشمارك.
+
+مجموعة البنشمارك الحالية تضم 65 حالة، بينها 9 negative controls. تقيس البوابة التشخيص والإصلاح منفصلين: false-positive تشخيصي، ونجاح الرقعة بمطابقة المصدر المصحح كاملًا مع ground truth بعد التطبيق داخل مشروع مؤقت، وpatch false-positive مستقل. خط الإصدار الحالي يحقق 4/4 نجاح رقع، و0/9 patch false positives، و0% diagnostic false-positive؛ المطابقة المحلية لا تستبدل إثبات V1/V2 السلوكي.
 
 ## نموذج BIR الحالي
 
@@ -444,9 +457,9 @@ python -m coverage report
 
 ## الحدود الحالية
 
-- يطبق الإصلاح حاليًا فقط لخطأ اسم Python عندما يوجد رمز بديل قريب وموقع سطر واضح.
-- تحليل TypeScript للرموز أولي ولا يستخدم Tree-sitter أو TypeScript compiler بعد.
-- إثبات Docker الحالي يحتاج صورة تحتوي أداة الاختبار المطلوبة؛ صورة Python الافتراضية مناسبة لاختبارات `python` المباشرة، بينما يحتاج pytest إلى صورة تتضمن pytest.
+- الإصلاحات الجديدة typo-only ومحافظة: AttributeError، وimports المحلية، وKeyError الحرفي، وأسماء TypeScript/JavaScript غير المعرفة. الحالات الغامضة تُرفض بدل التخمين.
+- تحليل TypeScript لا يستخدم Tree-sitter؛ إثباته السلوكي يتطلب `tsc --noEmit` مثبتًا مسبقًا أو صورة Docker مخصصة مثبتة بـdigest.
+- صورة pytest المنشورة مثبتة بـdigest وتدعم pytest فقط؛ لا تدّعي احتواء Node أو TypeScript.
 - بيانات SWE-bench Verified تحمل رقعة واختبارات معيارية، لكن استيرادها لا يعني أنها نجحت على كود المستخدم الحالي.
 - سجلات BugsInPy غالبًا لا تتضمن وصفًا صريحًا للخطأ أو السبب، ولذلك تبقى `unclassified` حتى المراجعة.
 - مزود LLM ما زال stub اختياريًا معطلًا افتراضيًا؛ لا يوجد تكامل نموذج لغوي مكتمل أو QUBO/Ising backend في هذه النسخة.
@@ -456,9 +469,18 @@ python -m coverage report
 
 ## المرحلة التالية
 
-1. استعادة بوابة الترقية بإعادة إثبات `AttributeError` وربط `ProofResult` بالحالة والرقعة، مع سبب من المصدر أو مراجعة بشرية موثقة وإثبات `V2`.
-2. بناء صورة تحقق pytest منشورة ومثبتة بالاعتماديات وdigest بدل قيمة placeholder الحالية.
-3. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+1. استعادة بوابة ترقية الذاكرة بإعادة الإثبات وربط `ProofResult` بالحالة والرقعة والمراجعة البشرية.
+2. توسيع عينة BugsInPy إلى حالات fail-before صالحة في runtime مثبت بدل تحويل الضوابط السلبية إلى ادعاء نجاح.
+3. إضافة فهرسة TypeScript أدق بـTree-sitter أو Language Service دون إدخالها كاعتمادية تشغيل افتراضية.
+
+## ما الجديد في 0.10.0
+
+- أمر `verify-patch` لرقع unified diff القادمة من Aider/OpenHands/Copilot وغيرها، مع parser محدود fail-closed وتطبيق ذري داخل نسخة الإثبات فقط.
+- إصلاحات typo-only محافظة لـAttributeError وimports المحلية وKeyError وTypeScript/JavaScript، مع رفض الالتباس والمسارات غير الآمنة.
+- 9 negative controls محلية ومقاييس منفصلة للتشخيص وpatch success وpatch false-positive؛ البوابة الحالية 4/4 exact-match للرقع المؤهلة و0/9 patch false positives.
+- صورة pytest حقيقية منشورة من متطلبات ذات hashes ومثبتة بالـdigest `45181883b866f80ef1f3d1dc00661148eaf6b2e3715d0b7592d8905fd5221280`.
+- تجربة BugsInPy مستقلة بأربع حالات خارجية مثبتة: 1/1 V2 fail-to-pass للرقعة الرسمية و0/3 false positives للضوابط السلبية.
+- حسم metadata الإصدار الجديد على `LicenseRef-Custom-Attribution`؛ شروط الإصدارات المنشورة سابقًا لا تتغير بأثر رجعي.
 
 ## ما الجديد في 0.9.0
 

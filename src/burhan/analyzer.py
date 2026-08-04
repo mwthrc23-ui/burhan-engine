@@ -68,7 +68,14 @@ TS_WRONG_ARG_COUNT = re.compile(
     r"Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<given>\d+)"
 )
 JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
-ENGINE_VERSION = "0.9.0"
+JS_REFERENCE_ERROR = re.compile(
+    r"ReferenceError:\s+(?P<name>[A-Za-z_$][\w$]*)\s+is not defined"
+)
+JS_STACK_LOCATION = re.compile(
+    r"(?P<file>(?:[A-Za-z]:)?[^()\s\r\n]+?\.(?:js|jsx|ts|tsx)):"
+    r"(?P<line>\d+):(?P<column>\d+)"
+)
+ENGINE_VERSION = "0.10.0"
 
 
 class BurhanAnalyzer:
@@ -85,7 +92,7 @@ class BurhanAnalyzer:
         snapshot = self._scanner.scan(project)
         code_tree = build_code_tree(snapshot)
         state, symbols = self._build_state(snapshot, goal, error_text)
-        hypotheses, questions = self._diagnose(error_text, symbols)
+        hypotheses, questions = self._diagnose(error_text, symbols, snapshot)
         state = self._attach_hypotheses(state, hypotheses)
         digest = self._input_digest(snapshot, goal, error_text)
         residual_risks = self._residual_risks(snapshot, hypotheses[0])
@@ -170,7 +177,10 @@ class BurhanAnalyzer:
         return tuple(target for target in candidates if isinstance(target, ast.Name))
 
     def _diagnose(
-        self, error_text: str, symbols: tuple[str, ...]
+        self,
+        error_text: str,
+        symbols: tuple[str, ...],
+        snapshot: ProjectSnapshot,
     ) -> tuple[tuple[Hypothesis, ...], tuple[str, ...]]:
         frames = tuple(PYTHON_FRAME.finditer(error_text))
         python_location = None
@@ -179,7 +189,7 @@ class BurhanAnalyzer:
             python_location = f"{self._normalize_path(last.group('file'))}:{last.group('line')}"
 
         specialized = self._diagnose_specialized_families(
-            error_text, symbols, python_location
+            error_text, symbols, snapshot, python_location
         )
         if specialized is not None:
             return specialized
@@ -199,6 +209,35 @@ class BurhanAnalyzer:
                 explanation += f"، وأقرب رمز معروف هو '{replacement}'"
             return (self._make_hypothesis(
                 "undefined_name", name, explanation, python_location, evidence, replacement, uncertainty=0.05
+            ),), ()
+
+        js_reference_match = JS_REFERENCE_ERROR.search(error_text)
+        if js_reference_match:
+            name = js_reference_match.group("name")
+            replacement = self._closest_symbol(name, symbols)
+            locations = tuple(JS_STACK_LOCATION.finditer(error_text))
+            location = None
+            if locations:
+                first = locations[0]
+                location = (
+                    f"{self._normalize_path(first.group('file'))}:"
+                    f"{first.group('line')}:{first.group('column')}"
+                )
+            explanation = f"JavaScript استخدم الاسم غير المعرّف '{name}'"
+            if replacement:
+                explanation += f"، وأقرب رمز معروف هو '{replacement}'"
+            evidence = (
+                Evidence("javascript", f"ReferenceError: '{name}' is not defined", 2.4),
+                Evidence("stack", f"موقع JavaScript هو {location or 'غير المحدد'}", 1.2),
+            )
+            return (self._make_hypothesis(
+                "undefined_name",
+                name,
+                explanation,
+                location,
+                evidence,
+                replacement,
+                uncertainty=0.08,
             ),), ()
 
         unbound_match = PYTHON_UNBOUND_ERROR.search(error_text)
@@ -222,6 +261,9 @@ class BurhanAnalyzer:
         if attribute_match:
             object_type = attribute_match.group("object_type")
             name = attribute_match.group("name")
+            replacement = self._closest_symbol(
+                name, self._python_attribute_candidates(snapshot)
+            )
             evidence = (
                 Evidence(
                     "runtime",
@@ -236,6 +278,7 @@ class BurhanAnalyzer:
                 f"الكائن '{object_type}' لا يعرّف الخاصية أو الدالة '{name}'",
                 python_location,
                 evidence,
+                replacement,
                 uncertainty=0.18,
             ),), ("تحقق من إصدار المكتبة واسم API المتاح في هذا الإصدار.",)
 
@@ -243,6 +286,9 @@ class BurhanAnalyzer:
         if import_name_match:
             name = import_name_match.group("name")
             module = import_name_match.group("module") or "unknown"
+            replacement = self._closest_symbol(
+                name, self._local_module_symbols(snapshot, module)
+            )
             evidence = (
                 Evidence("runtime", f"ImportError: لا يمكن استيراد الاسم '{name}' من الوحدة '{module}'", 2.3),
                 Evidence("traceback", f"آخر إطار مرتبط بالموقع {python_location or 'غير المحدد'}", 1.2),
@@ -253,12 +299,16 @@ class BurhanAnalyzer:
                 f"الاسم '{name}' غير موجود في الوحدة '{module}'",
                 python_location,
                 evidence,
+                replacement,
                 uncertainty=0.2,
             ),), ("هل الاسم موجود في الإصدار المثبت من الوحدة؟ تحقق من توثيق الوحدة.",)
 
         module_match = PYTHON_MODULE_ERROR.search(error_text)
         if module_match:
             module = module_match.group("name")
+            replacement = self._closest_symbol(
+                module, self._local_module_candidates(snapshot)
+            )
             evidence = (Evidence("runtime", f"Python لم يجد الوحدة '{module}'", 2.3),)
             return (self._make_hypothesis(
                 "missing_module",
@@ -266,6 +316,7 @@ class BurhanAnalyzer:
                 f"الوحدة '{module}' غير متاحة في بيئة التشغيل أو أن اسم الاستيراد غير صحيح",
                 python_location,
                 evidence,
+                replacement,
                 uncertainty=0.2,
             ),), ("هل الوحدة مدرجة ضمن تبعيات المشروع وبيئة التشغيل الحالية؟",)
 
@@ -481,6 +532,7 @@ class BurhanAnalyzer:
         self,
         error_text: str,
         symbols: tuple[str, ...],
+        snapshot: ProjectSnapshot,
         python_location: str | None,
     ) -> tuple[tuple[Hypothesis, ...], tuple[str, ...]] | None:
         """Adapt the richer family handlers to the public hypothesis model."""
@@ -492,6 +544,7 @@ class BurhanAnalyzer:
 
         key_results = KeyErrorHandler().diagnose(error_text)
         if key_results:
+            key_candidates = self._python_literal_key_candidates(snapshot)
             key_kinds = (
                 "missing_key",
                 "key_name_typo",
@@ -504,6 +557,9 @@ class BurhanAnalyzer:
                     kind=key_kinds[min(index, len(key_kinds) - 1)],
                     target=item.key_name,
                     location=python_location,
+                    suggested_replacement=self._closest_symbol(
+                        item.key_name, key_candidates
+                    ),
                 )
                 for index, item in enumerate(key_results)
             )
@@ -560,6 +616,7 @@ class BurhanAnalyzer:
         kind: str,
         target: str,
         location: str | None,
+        suggested_replacement: str | None = None,
     ) -> Hypothesis:
         supporting = tuple(
             Evidence("family-handler", summary, 1.0)
@@ -578,6 +635,7 @@ class BurhanAnalyzer:
             location=location,
             energy=max(0.0, 1.0 - confidence),
             confidence=confidence,
+            suggested_replacement=suggested_replacement,
             evidence=evidence,
         )
 
@@ -613,8 +671,99 @@ class BurhanAnalyzer:
 
     @staticmethod
     def _closest_symbol(name: str, symbols: tuple[str, ...]) -> str | None:
-        matches = difflib.get_close_matches(name, symbols, n=1, cutoff=0.72)
-        return matches[0] if matches else None
+        candidates = tuple(
+            candidate for candidate in dict.fromkeys(symbols) if candidate != name
+        )
+        matches = difflib.get_close_matches(name, candidates, n=2, cutoff=0.72)
+        return matches[0] if len(matches) == 1 else None
+
+    @classmethod
+    def _python_attribute_candidates(cls, snapshot: ProjectSnapshot) -> tuple[str, ...]:
+        candidates: list[str] = []
+        for source, tree in cls._python_trees(snapshot):
+            candidates.extend(cls._extract_symbols(source))
+            candidates.extend(
+                node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+            )
+        return tuple(dict.fromkeys(candidates))
+
+    @classmethod
+    def _python_literal_key_candidates(cls, snapshot: ProjectSnapshot) -> tuple[str, ...]:
+        candidates: list[str] = []
+        for _source, tree in cls._python_trees(snapshot):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Dict):
+                    candidates.extend(
+                        key.value
+                        for key in node.keys
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                    )
+                elif isinstance(node, ast.Subscript):
+                    key = node.slice
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        candidates.append(key.value)
+        return tuple(dict.fromkeys(candidates))
+
+    @classmethod
+    def _local_module_symbols(
+        cls, snapshot: ProjectSnapshot, module: str
+    ) -> tuple[str, ...]:
+        module_path = module.replace(".", "/")
+        expected_paths = {
+            f"{prefix}{module_path}{suffix}"
+            for prefix in ("", "src/")
+            for suffix in (".py", ".pyi", "/__init__.py", "/__init__.pyi")
+        }
+        for source in snapshot.files:
+            if source.relative_path in expected_paths:
+                return cls._extract_module_exports(source)
+        return ()
+
+    @classmethod
+    def _extract_module_exports(cls, source: SourceFile) -> tuple[str, ...]:
+        try:
+            tree = ast.parse(source.content)
+        except SyntaxError:
+            return ()
+        exports: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                exports.append(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                exports.extend(target.id for target in cls._assignment_targets(node))
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                exports.extend(
+                    alias.asname or alias.name.split(".", 1)[0] for alias in node.names
+                )
+        return tuple(dict.fromkeys(exports))
+
+    @staticmethod
+    def _local_module_candidates(snapshot: ProjectSnapshot) -> tuple[str, ...]:
+        candidates: list[str] = []
+        for source in snapshot.files:
+            path = source.relative_path
+            if not path.endswith((".py", ".pyi")):
+                continue
+            without_suffix = path.rsplit(".", 1)[0]
+            module = without_suffix.removesuffix("/__init__").replace("/", ".")
+            module = module.removeprefix("src.")
+            if module:
+                candidates.append(module)
+        return tuple(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _python_trees(
+        snapshot: ProjectSnapshot,
+    ) -> tuple[tuple[SourceFile, ast.AST], ...]:
+        parsed: list[tuple[SourceFile, ast.AST]] = []
+        for source in snapshot.files:
+            if not source.relative_path.endswith((".py", ".pyi")):
+                continue
+            try:
+                parsed.append((source, ast.parse(source.content)))
+            except SyntaxError:
+                continue
+        return tuple(parsed)
 
     def _diagnose_typescript(
         self,

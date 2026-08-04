@@ -4,6 +4,7 @@ import ast
 import difflib
 import hashlib
 import importlib.util
+import keyword
 import math
 import os
 import re
@@ -17,6 +18,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from .external_patch import ExternalPatchResult, apply_external_patch
 from .model import AnalysisResult, BirEdge, BirNode, Evidence, Hypothesis, NodeKind
 from .scanner import (
     TraversalLimitError,
@@ -31,11 +33,12 @@ DEFAULT_DOCKER_IMAGE = (
     "python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
 )
 
-# Pinned pytest image (python:3.12-slim + pytest 8.x).
+# Pinned pytest image (python:3.12-slim + pytest 9.1.1).
 # Rebuild with: docker build -f docker/Dockerfile.pytest -t burhan-pytest:local .
 # Then pin: docker inspect --format='{{index .RepoDigests 0}}' burhan-pytest:local
 PYTEST_DOCKER_IMAGE = (
-    "burhan-pytest@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "ghcr.io/mwthrc23-ui/burhan-pytest@sha256:"
+    "45181883b866f80ef1f3d1dc00661148eaf6b2e3715d0b7592d8905fd5221280"
 )
 PINNED_DOCKER_IMAGE_PATTERN = re.compile(
     r"(?=.{1,255}@sha256:)"
@@ -141,33 +144,65 @@ class ProofResult:
 
 
 class PatchEngine:
+    _PYTHON_KINDS = frozenset(
+        {
+            "attribute_error",
+            "missing_import_name",
+            "missing_key",
+            "missing_module",
+            "unbound_local_variable",
+            "undefined_name",
+        }
+    )
+    _JAVASCRIPT_SUFFIXES = frozenset({".js", ".jsx", ".ts", ".tsx"})
+    _JAVASCRIPT_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
     def repair(self, project: Path, hypothesis: Hypothesis, *, apply: bool = False) -> PatchResult:
-        if hypothesis.kind not in ("undefined_name", "unbound_local_variable") or not hypothesis.suggested_replacement:
-            raise ValueError("this repair engine currently supports undefined/unbound names with a known replacement")
+        replacement = hypothesis.suggested_replacement
+        if not replacement:
+            raise ValueError("this repair engine requires a known replacement")
         if not hypothesis.location:
             raise ValueError("hypothesis has no source location")
+        if not hypothesis.target or any(
+            marker in value for value in (hypothesis.target, replacement) for marker in "\r\n"
+        ):
+            raise ValueError("repair target and replacement must be single-line values")
 
         root = project.expanduser().resolve()
         if not root.is_dir():
             raise ValueError(f"project directory does not exist: {root}")
         relative_hint, line_number = self._parse_location(hypothesis.location)
         source_path = self._resolve_source(root, relative_hint)
-        if source_path.suffix.lower() not in {".py", ".pyi"}:
-            raise ValueError("V0 repair currently supports Python source files only")
         if source_path.stat().st_size > 1_000_000:
             raise ValueError("source file exceeds the 1 MB repair limit")
 
         original = source_path.read_text(encoding="utf-8")
-        updated = self._replace_on_line(
-            original,
-            line_number,
-            hypothesis.target,
-            hypothesis.suggested_replacement,
-        )
-        try:
-            ast.parse(updated, filename=source_path.name)
-        except SyntaxError as error:
-            raise ValueError("patched source is not valid Python") from error
+        suffix = source_path.suffix.lower()
+        if suffix in {".py", ".pyi"}:
+            checks = self._repair_python(
+                root,
+                source_path,
+                original,
+                line_number,
+                hypothesis.kind,
+                hypothesis.target,
+                replacement,
+            )
+            updated = checks[0]
+            verification_checks = checks[1]
+        elif suffix in self._JAVASCRIPT_SUFFIXES:
+            if hypothesis.kind != "undefined_name":
+                raise ValueError("JavaScript repair supports undefined-name typos only")
+            updated = self._replace_javascript_identifier_on_line(
+                original, line_number, hypothesis.target, replacement
+            )
+            verification_checks = (
+                "path_in_project",
+                "single_identifier_replacement",
+                "javascript_identifier_token",
+            )
+        else:
+            raise ValueError("repair supports Python and TypeScript/JavaScript source files only")
 
         relative_path = source_path.relative_to(root).as_posix()
         diff = "\n".join(
@@ -190,10 +225,293 @@ class PatchEngine:
             artifact_hash=artifact_hash,
             verification=VerificationResult(
                 grade="V0",
-                checks=("path_in_project", "single_identifier_replacement", "python_ast_parse"),
+                checks=verification_checks,
                 limitations=("لم تُشغّل اختبارات المشروع", "لم يُفحص السلوك وقت التشغيل"),
             ),
         )
+
+    def _repair_python(
+        self,
+        root: Path,
+        source_path: Path,
+        original: str,
+        line_number: int,
+        kind: str,
+        target: str,
+        replacement: str,
+    ) -> tuple[str, tuple[str, ...]]:
+        if kind not in self._PYTHON_KINDS:
+            raise ValueError("unsupported conservative Python repair kind")
+        try:
+            tree = ast.parse(original, filename=source_path.name)
+        except SyntaxError as error:
+            raise ValueError("source is not valid Python") from error
+        self._validate_python_context(tree, line_number, kind, target)
+        if kind != "missing_key" and kind != "missing_module" and (
+            not replacement.isidentifier() or keyword.iskeyword(replacement)
+        ):
+            raise ValueError("Python name replacement must be a valid identifier")
+        if kind == "missing_key" and (
+            not replacement.isprintable()
+            or any(marker in replacement for marker in ("'", '"', "\\"))
+        ):
+            raise ValueError("replacement must remain a single literal key")
+        if kind == "missing_module" and not self._local_module_exists(
+            root, source_path, tree, line_number, target, replacement
+        ):
+            raise ValueError("module replacement must name a local module")
+        updated = self._replace_on_line(original, line_number, target, replacement)
+        try:
+            ast.parse(updated, filename=source_path.name)
+        except SyntaxError as error:
+            raise ValueError("patched source is not valid Python") from error
+        return updated, (
+            "path_in_project",
+            "single_identifier_replacement",
+            "python_syntax_context",
+            "python_ast_parse",
+        )
+
+    @staticmethod
+    def _validate_python_context(
+        tree: ast.AST, line_number: int, kind: str, target: str
+    ) -> None:
+        matches = 0
+        for node in ast.walk(tree):
+            if kind in {"undefined_name", "unbound_local_variable"}:
+                matches += int(
+                    isinstance(node, ast.Name)
+                    and node.id == target
+                    and node.lineno == line_number
+                )
+            elif kind == "attribute_error":
+                matches += int(
+                    isinstance(node, ast.Attribute)
+                    and node.attr == target
+                    and getattr(node, "end_lineno", node.lineno) == line_number
+                )
+            elif kind == "missing_import_name":
+                matches += PatchEngine._matching_imported_names(node, line_number, target)
+            elif kind == "missing_module":
+                matches += PatchEngine._matching_imported_modules(node, line_number, target)
+            elif kind == "missing_key":
+                matches += int(
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)
+                    and node.slice.value == target
+                    and node.slice.lineno == line_number
+                )
+        if matches == 0:
+            raise ValueError("target must occur once in the required Python syntax context")
+        if matches > 1:
+            raise ValueError("target must appear exactly once on the reported line")
+
+    @staticmethod
+    def _matching_imported_names(node: ast.AST, line_number: int, target: str) -> int:
+        if not isinstance(node, ast.ImportFrom):
+            return 0
+        return sum(
+            alias.name == target
+            and getattr(alias, "lineno", node.lineno) == line_number
+            for alias in node.names
+        )
+
+    @staticmethod
+    def _matching_imported_modules(node: ast.AST, line_number: int, target: str) -> int:
+        if isinstance(node, ast.Import):
+            return sum(
+                alias.name == target
+                and getattr(alias, "lineno", node.lineno) == line_number
+                for alias in node.names
+            )
+        if isinstance(node, ast.ImportFrom):
+            return int(node.module == target and node.lineno == line_number)
+        return 0
+
+    @staticmethod
+    def _local_module_exists(
+        root: Path,
+        source_path: Path,
+        tree: ast.AST,
+        line_number: int,
+        target: str,
+        module: str,
+    ) -> bool:
+        if not module or not all(part.isidentifier() for part in module.split(".")):
+            return False
+        relative = Path(*module.split("."))
+        search_roots = PatchEngine._module_search_roots(
+            root, source_path, tree, line_number, target
+        )
+        candidates = tuple(
+            candidate
+            for search_root in search_roots
+            for candidate in (
+                search_root / relative.with_suffix(".py"),
+                search_root / relative.with_suffix(".pyi"),
+                search_root / relative / "__init__.py",
+                search_root / relative / "__init__.pyi",
+            )
+        )
+        return any(
+            candidate.is_file()
+            and not PatchEngine._has_link_or_reparse(root, candidate)
+            and candidate.resolve().is_relative_to(root)
+            for candidate in candidates
+        )
+
+    @staticmethod
+    def _module_search_roots(
+        root: Path,
+        source_path: Path,
+        tree: ast.AST,
+        line_number: int,
+        target: str,
+    ) -> tuple[Path, ...]:
+        relative_import = next(
+            (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.module == target
+                and node.lineno == line_number
+                and node.level > 0
+            ),
+            None,
+        )
+        if relative_import is None:
+            return (root, root / "src")
+        package_root = source_path.parent
+        for _ in range(relative_import.level - 1):
+            package_root = package_root.parent
+        return (package_root,)
+
+    @classmethod
+    def _replace_javascript_identifier_on_line(
+        cls, content: str, line_number: int, target: str, replacement: str
+    ) -> str:
+        if not cls._JAVASCRIPT_IDENTIFIER.fullmatch(target) or not cls._JAVASCRIPT_IDENTIFIER.fullmatch(
+            replacement
+        ):
+            raise ValueError("JavaScript repair requires valid identifier tokens")
+        lines = content.splitlines(keepends=True)
+        if line_number > len(lines):
+            raise ValueError("reported line is outside the source file")
+        line = lines[line_number - 1]
+        pattern = re.compile(rf"(?<![\w$]){re.escape(target)}(?![\w$])")
+        occurrences = tuple(pattern.finditer(line))
+        if len(occurrences) != 1:
+            raise ValueError("target must appear exactly once on the reported line")
+        occurrence = occurrences[0]
+        prefix = "".join(lines[: line_number - 1])
+        if (
+            cls._javascript_prefix_has_open_context(prefix)
+            or occurrence.span() not in cls._javascript_identifier_spans(line)
+        ):
+            raise ValueError("target is not a JavaScript identifier token")
+        updated_line = line[: occurrence.start()] + replacement + line[occurrence.end() :]
+        return "".join(lines[: line_number - 1] + [updated_line] + lines[line_number:])
+
+    @classmethod
+    def _javascript_identifier_spans(cls, line: str) -> tuple[tuple[int, int], ...]:
+        spans: list[tuple[int, int]] = []
+        index = 0
+        while index < len(line):
+            if line.startswith("//", index):
+                break
+            if line.startswith("/*", index):
+                end = line.find("*/", index + 2)
+                if end < 0:
+                    break
+                index = end + 2
+                continue
+            if line[index] == "/":
+                index = cls._skip_javascript_regex(line, index)
+                continue
+            if line[index] in {"'", '"', "`"}:
+                index = cls._skip_javascript_string(line, index)
+                continue
+            match = cls._JAVASCRIPT_IDENTIFIER.match(line, index)
+            if match:
+                spans.append(match.span())
+                index = match.end()
+                continue
+            index += 1
+        return tuple(spans)
+
+    @staticmethod
+    def _javascript_prefix_has_open_context(content: str) -> bool:
+        quote: str | None = None
+        in_block_comment = False
+        in_line_comment = False
+        index = 0
+        while index < len(content):
+            if in_line_comment:
+                if content[index] == "\n":
+                    in_line_comment = False
+                index += 1
+            elif in_block_comment:
+                if content.startswith("*/", index):
+                    in_block_comment = False
+                    index += 2
+                else:
+                    index += 1
+            elif quote is not None:
+                if content[index] == "\\":
+                    index += 2
+                elif content[index] == quote:
+                    quote = None
+                    index += 1
+                else:
+                    index += 1
+            elif content.startswith("//", index):
+                in_line_comment = True
+                index += 2
+            elif content.startswith("/*", index):
+                in_block_comment = True
+                index += 2
+            elif content[index] in {"'", '"', "`"}:
+                quote = content[index]
+                index += 1
+            else:
+                index += 1
+        return in_block_comment or quote is not None
+
+    @staticmethod
+    def _skip_javascript_regex(line: str, start: int) -> int:
+        index = start + 1
+        in_character_class = False
+        while index < len(line):
+            if line[index] == "\\":
+                index += 2
+            elif line[index] == "[":
+                in_character_class = True
+                index += 1
+            elif line[index] == "]":
+                in_character_class = False
+                index += 1
+            elif line[index] == "/" and not in_character_class:
+                index += 1
+                while index < len(line) and line[index].isalpha():
+                    index += 1
+                return index
+            else:
+                index += 1
+        return len(line)
+
+    @staticmethod
+    def _skip_javascript_string(line: str, start: int) -> int:
+        quote = line[start]
+        index = start + 1
+        while index < len(line):
+            if line[index] == "\\":
+                index += 2
+            elif line[index] == quote:
+                return index + 1
+            else:
+                index += 1
+        return len(line)
 
     @staticmethod
     def _parse_location(location: str) -> tuple[str, int]:
@@ -213,12 +531,28 @@ class PatchEngine:
     @staticmethod
     def _resolve_source(root: Path, path_text: str) -> Path:
         candidate = Path(path_text)
-        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+        lexical = Path(os.path.abspath(candidate if candidate.is_absolute() else root / candidate))
+        if lexical.is_relative_to(root) and PatchEngine._has_link_or_reparse(root, lexical):
+            raise ValueError("source path contains a link or reparse point")
+        resolved = lexical.resolve()
         if not resolved.is_relative_to(root):
             raise ValueError("source path is outside project")
         if not resolved.is_file():
             raise ValueError(f"source file does not exist: {path_text}")
         return resolved
+
+    @staticmethod
+    def _has_link_or_reparse(root: Path, candidate: Path) -> bool:
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            return True
+        current = root
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink() or (current.exists() and is_reparse_path(current)):
+                return True
+        return False
 
     @staticmethod
     def _replace_on_line(content: str, line_number: int, target: str, replacement: str) -> str:
@@ -283,8 +617,9 @@ class ProofRunner:
     def prove(
         self,
         project: Path,
-        hypothesis: Hypothesis,
+        hypothesis: Hypothesis | None,
         *,
+        external_patch: str | bytes | None = None,
         test_program: str = "python",
         test_args: tuple[str, ...] = ("app.py",),
         timeout_seconds: float = 30.0,
@@ -292,9 +627,15 @@ class ProofRunner:
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         expected_project_fingerprint: str | None = None,
     ) -> ProofResult:
-        command, executable = self._command(test_program, test_args)
         if backend not in {"local", "docker"}:
             raise ProofConfigurationError("unsupported proof backend; use local or docker")
+        if (hypothesis is None) == (external_patch is None):
+            raise ProofConfigurationError(
+                "provide exactly one analyzed hypothesis or external patch"
+            )
+        command, executable = self._command(
+            test_program, test_args, local=backend == "local"
+        )
         if backend == "local" and test_program == "pytest" and importlib.util.find_spec("pytest") is None:
             raise ProofInfrastructureError("pytest is not installed in the local proof runtime")
         if backend == "docker" and PINNED_DOCKER_IMAGE_PATTERN.fullmatch(docker_image) is None:
@@ -305,13 +646,20 @@ class ProofRunner:
         root = project.expanduser().resolve()
         if not root.is_dir():
             raise ProofConfigurationError(f"project directory does not exist: {root}")
-        if not hypothesis.location:
-            raise ProofConfigurationError("hypothesis has no source location")
-        relative_hint, _ = PatchEngine._parse_location(hypothesis.location)
-        original_source = PatchEngine._resolve_source(root, relative_hint)
-        relative_source = original_source.relative_to(root)
-        if any(is_excluded_directory(part) for part in relative_source.parts[:-1]):
-            raise ProofConfigurationError("proof target is outside the analyzed scan scope")
+        if hypothesis is not None:
+            if not hypothesis.location:
+                raise ProofConfigurationError("hypothesis has no source location")
+            relative_hint, _ = PatchEngine._parse_location(hypothesis.location)
+            original_source = PatchEngine._resolve_source(root, relative_hint)
+            relative_source = original_source.relative_to(root)
+            if any(is_excluded_directory(part) for part in relative_source.parts[:-1]):
+                raise ProofConfigurationError("proof target is outside the analyzed scan scope")
+        else:
+            assert external_patch is not None
+            try:
+                apply_external_patch(root, external_patch, apply=False)
+            except ValueError as error:
+                raise ProofConfigurationError("external patch is invalid or unsafe") from error
         original_manifest = self._project_manifest(
             root, allow_secret_metadata=backend == "docker"
         )
@@ -343,11 +691,19 @@ class ProofRunner:
                 raise ProofRejected("test timed out before patch")
             if before.exit_code == 0:
                 raise ProofRejected("test already passes before patch")
-            if not self._baseline_matches_hypothesis(before, hypothesis):
+            if hypothesis is not None and not self._baseline_matches_hypothesis(
+                before, hypothesis
+            ):
                 raise ProofRejected("baseline failure does not match analyzed error")
 
             try:
-                patch = PatchEngine().repair(sandbox, hypothesis, apply=True)
+                if hypothesis is not None:
+                    patch = PatchEngine().repair(sandbox, hypothesis, apply=True)
+                else:
+                    assert external_patch is not None
+                    patch = self._external_patch_result(
+                        apply_external_patch(sandbox, external_patch, apply=True)
+                    )
             except ValueError as error:
                 raise ProofRejected("patch could not be applied to the proof copy") from error
             after = (
@@ -394,6 +750,7 @@ class ProofRunner:
                     "sanitized_environment",
                     "parent_timeout_enforced",
                 )
+                + (("external_patch_validated",) if external_patch is not None else ())
                 + (
                     (
                         "network_disabled",
@@ -432,10 +789,13 @@ class ProofRunner:
 
     @staticmethod
     def _command(
-        test_program: str, test_args: tuple[str, ...]
+        test_program: str,
+        test_args: tuple[str, ...],
+        *,
+        local: bool = True,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        if test_program not in {"python", "pytest"}:
-            raise ProofConfigurationError("unsupported test program; use python or pytest")
+        if test_program not in {"python", "pytest", "tsc"}:
+            raise ProofConfigurationError("unsupported test program; use python, pytest, or tsc")
         if len(test_args) > 64 or sum(len(argument) for argument in test_args) > 16_384:
             raise ProofConfigurationError("test arguments exceed count or total-size limits")
         if not all(
@@ -449,12 +809,34 @@ class ProofRunner:
                 "test arguments must be non-empty strings of at most 4096 characters"
             )
         display = (test_program,) + tuple(test_args)
-        executable = (
-            (sys.executable,) + tuple(test_args)
-            if test_program == "python"
-            else (sys.executable, "-m", "pytest") + tuple(test_args)
-        )
+        if test_program == "python":
+            executable = (sys.executable,) + tuple(test_args)
+        elif test_program == "pytest":
+            executable = (sys.executable, "-m", "pytest") + tuple(test_args)
+        elif local:
+            compiler = shutil.which("tsc")
+            if compiler is None:
+                raise ProofInfrastructureError("tsc is not installed in the local proof runtime")
+            executable = (compiler,) + tuple(test_args)
+        else:
+            executable = display
         return display, executable
+
+    @staticmethod
+    def _external_patch_result(result: ExternalPatchResult) -> PatchResult:
+        return PatchResult(
+            diff=result.diff,
+            changed_files=result.changed_files,
+            applied=result.applied,
+            artifact_hash=result.artifact_hash,
+            verification=VerificationResult(
+                grade="V0",
+                checks=result.verification_checks + ("external_patch_validated",),
+                limitations=(
+                    "تم التحقق تركيبيًا من الرقعة؛ الإثبات السلوكي مستقل في نتيجة V1/V2",
+                ),
+            ),
+        )
 
     @classmethod
     def _copy_project(cls, source: Path, destination: Path) -> None:
@@ -719,26 +1101,70 @@ class ProofRunner:
 
     @staticmethod
     def _baseline_matches_hypothesis(run: CommandRun, hypothesis: Hypothesis) -> bool:
-        if hypothesis.kind not in ("undefined_name", "unbound_local_variable") or not hypothesis.location:
+        supported_kinds = PatchEngine._PYTHON_KINDS
+        if hypothesis.kind not in supported_kinds or not hypothesis.location:
             return False
         relative_hint, line_number = PatchEngine._parse_location(hypothesis.location)
         combined = f"{run.stdout}\n{run.stderr}".replace("\\", "/")
         target = re.escape(hypothesis.target)
-        if hypothesis.kind == "unbound_local_variable":
-            name_error = re.search(
-                rf"UnboundLocalError:\s+(?:cannot access local variable\s+|local variable\s+)"
-                rf"['\"]{target}['\"]",
-                combined,
-            )
-        else:
-            name_error = re.search(
-                rf"NameError:\s*name\s*['\"]{target}['\"]\s*is not defined",
-                combined,
-            )
         normalized_hint = relative_hint.replace("\\", "/")
         locations = {normalized_hint}
         if "/" not in normalized_hint:
             locations.add(Path(relative_hint).name)
+
+        if hypothesis.kind == "undefined_name" and any(
+            re.search(
+                rf"{re.escape(location)}\({line_number},\d+\):\s+error\s+TS2304:"
+                rf"[^\r\n]*Cannot find name\s+['\"]{target}['\"]",
+                combined,
+            )
+            for location in locations
+        ):
+            return True
+        if hypothesis.kind == "undefined_name" and any(
+            re.search(
+                rf"ReferenceError:[^\r\n]*\b{target}\s+is not defined[^\r\n]*\r?\n"
+                rf"[ \t]*at[ \t]+(?:[^\r\n(]*\()?"
+                rf"{re.escape(location)}:{line_number}:\d+\)?",
+                combined,
+            )
+            for location in locations
+        ):
+            return True
+
+        if hypothesis.kind == "unbound_local_variable":
+            matching_error = re.search(
+                rf"UnboundLocalError:\s+(?:cannot access local variable\s+|local variable\s+)"
+                rf"['\"]{target}['\"]",
+                combined,
+            )
+        elif hypothesis.kind == "undefined_name":
+            matching_error = re.search(
+                rf"NameError:\s*name\s*['\"]{target}['\"]\s*is not defined",
+                combined,
+            )
+        elif hypothesis.kind == "attribute_error":
+            matching_error = re.search(
+                rf"AttributeError:\s*['\"][^'\"]+['\"] object has no attribute "
+                rf"['\"]{target}['\"]",
+                combined,
+            )
+        elif hypothesis.kind == "missing_import_name":
+            matching_error = re.search(
+                rf"ImportError:\s*cannot import name\s*['\"]{target}['\"]",
+                combined,
+            )
+        elif hypothesis.kind == "missing_module":
+            matching_error = re.search(
+                rf"(?:ModuleNotFoundError|ImportError):\s*No module named\s*"
+                rf"['\"]{target}['\"]",
+                combined,
+            )
+        else:
+            matching_error = re.search(
+                rf"KeyError:\s*['\"]{target}['\"]",
+                combined,
+            )
         matching_location = any(
             re.search(
                 rf"{re.escape(location)}(?:['\"],?\s*line\s+|:){line_number}\b",
@@ -746,7 +1172,7 @@ class ProofRunner:
             )
             for location in locations
         )
-        return bool(name_error) and matching_location
+        return bool(matching_error) and matching_location
 
     @classmethod
     def _decode_output(cls, output: bytes) -> tuple[str, bool]:

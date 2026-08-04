@@ -1,0 +1,5 @@
+--- a/app.py
++++ b/app.py
+@@ -6 +6 @@
+-    return grete("Ada")
++    return greet("Ada")

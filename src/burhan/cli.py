@@ -74,6 +74,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_case_arguments(proof)
     _add_proof_arguments(proof, backend_default="local")
     proof.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    verify_patch = subcommands.add_parser(
+        "verify-patch",
+        help="تحقق من unified diff خارجي داخل نسخة مؤقتة دون الثقة بمصدره",
+    )
+    verify_patch.add_argument("--project", type=Path, required=True, help="مسار المشروع")
+    verify_patch.add_argument(
+        "--patch-file",
+        type=Path,
+        required=True,
+        help="رقعة unified diff من Aider أو OpenHands أو Copilot أو أداة أخرى",
+    )
+    _add_proof_arguments(verify_patch, backend_default="local")
+    verify_patch.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
     ci_gate = subcommands.add_parser(
         "ci-gate",
         help="شغّل إثباتًا وقيّمه بسياسة مؤسسية وأصدر تقرير تدقيق آمنًا",
@@ -220,7 +233,9 @@ def _add_proof_arguments(command: argparse.ArgumentParser, *, backend_default: s
         action="store_true",
         help="أقر بأن أمر الاختبار من مشروع محلي موثوق",
     )
-    command.add_argument("--test-program", choices=("python", "pytest"), default="python")
+    command.add_argument(
+        "--test-program", choices=("python", "pytest", "tsc"), default="python"
+    )
     command.add_argument("--test-arg", action="append", default=[])
     command.add_argument("--timeout", type=float, default=30.0)
     command.add_argument(
@@ -272,6 +287,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _code_tree(args)
     if args.command == "repair-proof":
         return _repair_proof(args)
+    if args.command == "verify-patch":
+        return _verify_patch(args)
     if args.command == "ci-gate":
         return _ci_gate(args)
     try:
@@ -351,7 +368,7 @@ def _repair_proof(args: argparse.Namespace) -> int:
     try:
         error_text = _read_error(args.error, args.error_file)
         analysis = BurhanAnalyzer().analyze(args.project, args.goal, error_text)
-        default_args = ("app.py",) if args.test_program == "python" else ("-q",)
+        default_args = _default_proof_args(args.test_program)
         docker_image = _resolve_proof_docker_image(
             test_program=args.test_program,
             backend=args.backend,
@@ -386,6 +403,43 @@ def _repair_proof(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_patch(args: argparse.Namespace) -> int:
+    if not args.trust_local_tests:
+        print(
+            "خطأ: يتطلب التحقق إقرار --trust-local-tests لأن الاختبار ينفذ كود المشروع",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        patch_text = _read_limited_text(args.patch_file, limit=1_000_000)
+        default_args = _default_proof_args(args.test_program)
+        docker_image = _resolve_proof_docker_image(
+            test_program=args.test_program,
+            backend=args.backend,
+            docker_image=args.docker_image,
+        )
+        proof = ProofRunner().prove(
+            args.project,
+            None,
+            external_patch=patch_text,
+            test_program=args.test_program,
+            test_args=tuple(args.test_arg) or default_args,
+            timeout_seconds=args.timeout,
+            backend=args.backend,
+            docker_image=docker_image,
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError) as error:
+        print(f"لم تثبت الرقعة الخارجية: {error}", file=sys.stderr)
+        return 1
+
+    payload = {"source": "external_unified_diff", "proof": proof.to_dict()}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        _print_proof(proof)
+    return 0
+
+
 def _ci_gate(args: argparse.Namespace) -> int:
     if not args.trust_local_tests:
         print(
@@ -402,7 +456,7 @@ def _ci_gate(args: argparse.Namespace) -> int:
             error_path=args.error_file,
         )
         error_text = _read_error(args.error, args.error_file)
-        default_args = ("app.py",) if args.test_program == "python" else ("-q",)
+        default_args = _default_proof_args(args.test_program)
         docker_image = _resolve_proof_docker_image(
             test_program=args.test_program,
             backend=args.backend,
@@ -558,6 +612,14 @@ def _resolve_proof_docker_image(*, test_program: str, backend: str, docker_image
             "مرر --docker-image بصورة pytest مثبتة أو حدّث PYTEST_DOCKER_IMAGE."
         )
     return selected_image
+
+
+def _default_proof_args(test_program: str) -> tuple[str, ...]:
+    return {
+        "python": ("app.py",),
+        "pytest": ("-q",),
+        "tsc": ("--noEmit",),
+    }[test_program]
 
 
 def _memory_search(args: argparse.Namespace) -> int:
@@ -968,8 +1030,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                 for r in errors[:5]:
                     print(f"  [{r.case_id}] {r.error[:80]}")
 
-    # Exit 0 if top-1 >= 50%, else 1 (useful for CI)
-    return 0 if result.top1_success >= 0.50 else 1
+    return 0 if result.passes_release_gate else 1
 
 
 def _print_explain(result: object, patch: object | None) -> None:

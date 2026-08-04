@@ -1,0 +1,51 @@
+{
+  "cases": [
+    {
+      "id": "youtube-dl-1",
+      "patch_verified": false,
+      "reason": "test already passes before patch",
+      "status": "already_passes"
+    },
+    {
+      "id": "youtube-dl-2",
+      "patch_sha256": "sha256:7a83a140ebbdb954f74eec2c5c04894a769fc78d13262a9173fe0f181e332f62",
+      "patch_verified": true,
+      "proof_grade": "V2",
+      "status": "fail_to_pass"
+    },
+    {
+      "id": "youtube-dl-3",
+      "patch_verified": false,
+      "reason": "test already passes before patch",
+      "status": "already_passes"
+    },
+    {
+      "id": "youtube-dl-12",
+      "patch_verified": false,
+      "reason": "test already passes before patch",
+      "status": "already_passes"
+    }
+  ],
+  "dataset": {
+    "commit": "11c5f1eea954a42132cfd06bf257766a7963e0fd",
+    "license_status": "no repository-level license file in the pinned checkout",
+    "name": "BugsInPy",
+    "repository": "https://github.com/soarsmu/BugsInPy"
+  },
+  "metrics": {
+    "false_positive_rate": 0.0,
+    "false_positives": 0,
+    "negative_controls": 3,
+    "patch_success_rate": 1.0,
+    "patch_successes": 1,
+    "repair_eligible_cases": 1,
+    "total_cases": 4
+  },
+  "runtime_image": "python@sha256:b53f496ca43e5af6994f8e316cf03af31050bf7944e0e4a308ad86c001cf028b",
+  "schema_version": 1,
+  "subject": {
+    "license": "Unlicense",
+    "project": "youtube-dl",
+    "repository": "https://github.com/ytdl-org/youtube-dl"
+  }
+}
