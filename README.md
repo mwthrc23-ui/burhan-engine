@@ -78,7 +78,13 @@ docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.9.0
 docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.9.0 --version
 ```
 
-بعد النشر، خذ بصمة الصورة من صفحة الحزمة أو من `docker inspect` واستخدم مرجع `@sha256:...` بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
+البصمة المنشورة للإصدار `0.9.0` هي:
+
+```text
+ghcr.io/mwthrc23-ui/burhan-engine@sha256:b94fc3d82eef711c35753d21a90be325f4d558f0fcf686ebb9a08c6adecc716e
+```
+
+استخدم مرجع البصمة بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
