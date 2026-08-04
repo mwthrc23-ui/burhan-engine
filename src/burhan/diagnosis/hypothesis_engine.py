@@ -28,7 +28,7 @@ import re
 from dataclasses import replace
 from typing import Sequence
 
-from ..evidence import ConfidenceLevel, EvidenceFact, EvidenceGraph
+from ..evidence import EvidenceGraph
 from ..model import Evidence, Hypothesis
 from ..energy import confidence_from_energy, hypothesis_energy
 

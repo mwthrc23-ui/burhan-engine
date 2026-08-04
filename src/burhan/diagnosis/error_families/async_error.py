@@ -135,13 +135,13 @@ class AsyncErrorHandler:
                     ),
                     AsyncCandidate(
                         rank=2,
-                        description=f"Use asyncio.run() if calling from synchronous context",
+                        description="Use asyncio.run() if calling from synchronous context",
                         code_template=f"import asyncio\nresult = asyncio.run({name}())",
                         confidence=0.70,
                     ),
                     AsyncCandidate(
                         rank=3,
-                        description=f"Schedule with asyncio.create_task() if fire-and-forget",
+                        description="Schedule with asyncio.create_task() if fire-and-forget",
                         code_template=f"asyncio.create_task({name}())",
                         confidence=0.50,
                     ),

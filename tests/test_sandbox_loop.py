@@ -8,9 +8,7 @@ Covers mandatory test cases:
 from __future__ import annotations
 
 import tempfile
-import time
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from burhan.sandbox.sandbox_runner import (
@@ -23,11 +21,9 @@ from burhan.sandbox.sandbox_runner import (
 from burhan.verification.repair_loop import (
     AttemptRecord,
     RepairLoopConfig,
-    RepairLoopResult,
     build_loop_result_from_candidates,
 )
-from burhan.candidates.repair_candidates import RepairCandidate, generate_candidates
-from burhan.diagnosis.hypothesis_engine import HypothesisEngine
+from burhan.candidates.repair_candidates import RepairCandidate
 from burhan.model import Evidence, Hypothesis
 
 _PINNED_IMAGE = (

@@ -19,6 +19,8 @@ Notes
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -223,13 +225,24 @@ def write_sarif(
     if resolved.suffix.lower() not in {".sarif", ".json"}:
         raise ValueError("SARIF output path must end with .sarif or .json")
 
-    tmp_path = resolved.with_suffix(".tmp")
+    tmp_path: Path | None = None
     try:
-        tmp_path.write_text(
-            json.dumps(sarif_doc, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{resolved.name}.",
+            suffix=".tmp",
+            dir=resolved.parent,
         )
-        tmp_path.rename(resolved)
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(sarif_doc, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Hard-link publication is atomic and fails if the destination was
+        # created (including as a symlink) after the checks above.
+        os.link(tmp_path, resolved)
     except Exception:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
         raise
+    else:
+        tmp_path.unlink(missing_ok=True)

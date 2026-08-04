@@ -1,8 +1,6 @@
 """Security tests: symlink, path traversal, overwrite prevention (Phase security)."""
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -55,6 +53,12 @@ class TestSymlinkSecurity:
             fingerprint_project(tmp_path)
         import shutil
         shutil.rmtree(str(outside_dir), ignore_errors=True)
+
+    def test_symlink_directory_cycle_is_not_followed(self, tmp_path: Path) -> None:
+        (tmp_path / "app.py").write_text("x = 1\n")
+        loop = tmp_path / "loop"
+        loop.symlink_to(tmp_path, target_is_directory=True)
+        assert len(fingerprint_project(tmp_path)) == 64
 
 
 class TestPathTraversal:

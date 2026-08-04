@@ -29,7 +29,7 @@ class CliTests(unittest.TestCase):
             exit_code = main(["--version"])
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("burhan 0.8.1", output.getvalue())
+        self.assertIn("burhan 0.9.0", output.getvalue())
 
     def test_public_version_sources_are_consistent(self) -> None:
         project = Path(__file__).resolve().parents[1]
@@ -42,9 +42,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(package_version, burhan.__version__)
         self.assertIn(f"`{package_version}`", readme)
 
-    def test_release_version_is_081(self) -> None:
-        """All version sources must agree and equal the current release: 0.8.1."""
-        EXPECTED = "0.8.1"
+    def test_release_version_is_090(self) -> None:
+        """All version sources must agree and equal the current release: 0.9.0."""
+        EXPECTED = "0.9.0"
         project = Path(__file__).resolve().parents[1]
         package_version = tomllib.loads(
             (project / "pyproject.toml").read_text(encoding="utf-8")
@@ -59,22 +59,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(ENGINE_VERSION, EXPECTED, f"ENGINE_VERSION is {ENGINE_VERSION!r}, expected {EXPECTED!r}")
         self.assertEqual(burhan.__version__, EXPECTED, f"burhan.__version__ is {burhan.__version__!r}, expected {EXPECTED!r}")
 
-    def test_version_flag_matches_release_081(self) -> None:
-        """burhan --version must output 0.8.1."""
+    def test_version_flag_matches_release_090(self) -> None:
+        """burhan --version must output 0.9.0."""
         import io
         from contextlib import redirect_stdout
         output = io.StringIO()
         with redirect_stdout(output):
             main(["--version"])
-        self.assertIn("0.8.1", output.getvalue())
+        self.assertIn("0.9.0", output.getvalue())
 
-    def test_doctor_json_version_matches_release_081(self) -> None:
-        """burhan doctor --json must report burhan_version = 0.8.1."""
+    def test_doctor_json_version_matches_release_090(self) -> None:
+        """burhan doctor --json must report burhan_version = 0.9.0."""
         output = io.StringIO()
         with redirect_stdout(output):
             main(["doctor", "--json"])
         payload = json.loads(output.getvalue())
-        self.assertEqual(payload["checks"]["burhan_version"], "0.8.1")
+        self.assertEqual(payload["checks"]["burhan_version"], "0.9.0")
 
     def test_analyze_command_outputs_machine_readable_bir_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

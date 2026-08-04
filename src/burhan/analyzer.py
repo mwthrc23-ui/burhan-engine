@@ -68,7 +68,7 @@ TS_WRONG_ARG_COUNT = re.compile(
     r"Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<given>\d+)"
 )
 JS_SYMBOL_PATTERN = re.compile(r"\b(?:function|class|interface|type|const|let|var)\s+([A-Za-z_$][\w$]*)")
-ENGINE_VERSION = "0.8.1"
+ENGINE_VERSION = "0.9.0"
 
 
 class BurhanAnalyzer:
@@ -177,6 +177,12 @@ class BurhanAnalyzer:
         if frames:
             last = frames[-1]
             python_location = f"{self._normalize_path(last.group('file'))}:{last.group('line')}"
+
+        specialized = self._diagnose_specialized_families(
+            error_text, symbols, python_location
+        )
+        if specialized is not None:
+            return specialized
 
         name_match = PYTHON_NAME_ERROR.search(error_text)
         if name_match:
@@ -470,6 +476,110 @@ class BurhanAnalyzer:
         )
         hypothesis = replace(hypothesis, confidence=min(hypothesis.confidence, 0.35))
         return (hypothesis,), ("أرسل التتبع الكامل للأخطاء وأمر التشغيل الذي تسبب بها.",)
+
+    def _diagnose_specialized_families(
+        self,
+        error_text: str,
+        symbols: tuple[str, ...],
+        python_location: str | None,
+    ) -> tuple[tuple[Hypothesis, ...], tuple[str, ...]] | None:
+        """Adapt the richer family handlers to the public hypothesis model."""
+        from .diagnosis.error_families import (
+            AsyncErrorHandler,
+            KeyErrorHandler,
+            TypeScriptErrorHandler,
+        )
+
+        key_results = KeyErrorHandler().diagnose(error_text)
+        if key_results:
+            key_kinds = (
+                "missing_key",
+                "key_name_typo",
+                "wrong_dictionary",
+                "key_type_mismatch",
+            )
+            hypotheses = tuple(
+                self._adapt_family_hypothesis(
+                    item,
+                    kind=key_kinds[min(index, len(key_kinds) - 1)],
+                    target=item.key_name,
+                    location=python_location,
+                )
+                for index, item in enumerate(key_results)
+            )
+            return hypotheses, ("تحقق من مفاتيح القاموس الفعلية عند موقع الفشل.",)
+
+        async_results = AsyncErrorHandler().diagnose(error_text)
+        if async_results:
+            hypotheses = tuple(
+                self._adapt_family_hypothesis(
+                    item,
+                    kind="async_error",
+                    target=item.sub_kind,
+                    location=python_location,
+                )
+                for item in async_results
+            )
+            return hypotheses, ("تحقق من دورة الأحداث ومسار await عند موقع الفشل.",)
+
+        # Keep the location-aware legacy TypeScript parser for its established
+        # output. The specialized handler covers standard `tsc` one-line output.
+        if TS_DIAGNOSTIC.search(error_text):
+            return None
+        ts_results = TypeScriptErrorHandler().diagnose(error_text)
+        if ts_results:
+            kind_by_subkind = {
+                "missing_import": "undefined_name",
+                "typo_in_name": "undefined_name",
+                "missing_type_declaration": "undefined_name",
+                "missing_property": "missing_property",
+                "wrong_type_used": "missing_property",
+                "wrong_argument_type": "argument_type_mismatch",
+                "nullable_mismatch": "argument_type_mismatch",
+                "wrong_param_count": "wrong_argument_count",
+                "overload_mismatch": "wrong_argument_count",
+                "assignment_type_mismatch": "type_mismatch",
+            }
+            hypotheses = tuple(
+                self._adapt_family_hypothesis(
+                    item,
+                    kind=kind_by_subkind.get(item.sub_kind, item.kind),
+                    target=item.sub_kind,
+                    location=None,
+                )
+                for item in ts_results
+            )
+            return hypotheses, ("راجع تعريفات TypeScript والاستيرادات عند موقع التشخيص.",)
+
+        return None
+
+    @staticmethod
+    def _adapt_family_hypothesis(
+        item: object,
+        *,
+        kind: str,
+        target: str,
+        location: str | None,
+    ) -> Hypothesis:
+        supporting = tuple(
+            Evidence("family-handler", summary, 1.0)
+            for summary in getattr(item, "supporting")
+        )
+        opposing = tuple(
+            Evidence("opposing:family-handler", summary, 0.2)
+            for summary in getattr(item, "opposing")
+        )
+        evidence = supporting + opposing
+        confidence = float(getattr(item, "confidence"))
+        return Hypothesis(
+            kind=kind,
+            target=target,
+            explanation=str(getattr(item, "explanation")),
+            location=location,
+            energy=max(0.0, 1.0 - confidence),
+            confidence=confidence,
+            evidence=evidence,
+        )
 
     @staticmethod
     def _make_hypothesis(

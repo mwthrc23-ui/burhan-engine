@@ -9,6 +9,36 @@ from burhan.model import NodeKind
 
 
 class BurhanAnalyzerTests(unittest.TestCase):
+    def test_standard_tsc_output_uses_specialized_multi_candidate_handler(self) -> None:
+        error = "error TS2304: Cannot find name 'Widget'."
+        with tempfile.TemporaryDirectory() as directory:
+            result = BurhanAnalyzer().analyze(
+                Path(directory), "شخّص رمز TypeScript", error
+            )
+
+        self.assertEqual(result.primary.kind, "undefined_name")
+        self.assertGreaterEqual(len(result.hypotheses), 2)
+
+    def test_async_error_uses_specialized_multi_candidate_handler(self) -> None:
+        error = "RuntimeWarning: coroutine 'fetch' was never awaited"
+        with tempfile.TemporaryDirectory() as directory:
+            result = BurhanAnalyzer().analyze(
+                Path(directory), "شخّص خطأ async", error
+            )
+
+        self.assertEqual(result.primary.kind, "async_error")
+        self.assertGreaterEqual(len(result.hypotheses), 2)
+
+    def test_key_error_preserves_primary_kind_and_adds_candidates(self) -> None:
+        error = "KeyError: 'user_id'"
+        with tempfile.TemporaryDirectory() as directory:
+            result = BurhanAnalyzer().analyze(
+                Path(directory), "شخّص خطأ المفتاح", error
+            )
+
+        self.assertEqual(result.primary.kind, "missing_key")
+        self.assertGreaterEqual(len(result.hypotheses), 3)
+
     def test_python_name_error_links_trace_to_symbol_and_suggests_close_match(self) -> None:
         source = """\
 def greet(name):
@@ -37,7 +67,7 @@ NameError: name 'grete' is not defined
         self.assertTrue(any("NameError" in evidence.summary for evidence in result.primary.evidence))
         self.assertTrue(any(node.label == "greet" for node in result.state.nodes))
         self.assertTrue(result.case_id.startswith("case-"))
-        self.assertEqual(result.provenance.engine_version, "0.8.1")
+        self.assertEqual(result.provenance.engine_version, "0.9.0")
         self.assertTrue(result.provenance.input_fingerprint.startswith("sha256:"))
         self.assertTrue(result.residual_risks)
 

@@ -15,9 +15,10 @@ Design rules
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
+
+from ..scanner import TraversalLimitError, bounded_walk, is_excluded_directory
 
 
 # Directories that are always excluded from fingerprinting.
@@ -76,7 +77,7 @@ def fingerprint_project(root: Path, max_files: int = 10_000) -> str:
     h = hashlib.sha256()
     file_count = 0
 
-    for rel_path in _sorted_source_paths(root):
+    for rel_path in _sorted_source_paths(root, max_files=max_files):
         abs_path = root / rel_path
 
         # Symlink guard
@@ -92,10 +93,6 @@ def fingerprint_project(root: Path, max_files: int = 10_000) -> str:
             )
 
         file_count += 1
-        if file_count > max_files:
-            raise FingerprintError(
-                f"project contains more than {max_files} files; fingerprinting aborted"
-            )
 
         try:
             stat = abs_path.stat()
@@ -125,22 +122,39 @@ def fingerprint_changed(
     return current != baseline
 
 
-def _sorted_source_paths(root: Path) -> list[str]:
+def _sorted_source_paths(root: Path, max_files: int = 10_000) -> list[str]:
     """Return sorted relative paths of all non-excluded files under *root*.
 
-    Symlinked directories are followed (``followlinks=True``) so that
-    path-traversal via symlinked dirs is caught by the caller's symlink guard.
+    Symlinked directories are validated but never followed, preventing loops
+    and duplicate traversal. The file limit is enforced while collecting so a
+    hostile tree cannot exhaust memory before the caller sees it.
     """
     paths: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
-        # Prune excluded directories in-place
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in _EXCLUDED_DIRS and not d.startswith(".")
+    try:
+        walk = bounded_walk(
+            root,
+            max_entries=max(max_files * 4, 1),
+            max_directories=max(max_files, 1),
+            max_depth=64,
+            exclude_directory=lambda name: (
+                name in _EXCLUDED_DIRS or is_excluded_directory(name)
+            ),
         )
-        dir_rel = Path(dirpath).relative_to(root)
-        for filename in sorted(filenames):
-            rel = str(dir_rel / filename) if str(dir_rel) != "." else filename
-            paths.append(rel)
+        for dirpath, _dirnames, filenames in walk:
+            dir_rel = dirpath.relative_to(root)
+            for filename in filenames:
+                rel = str(dir_rel / filename) if str(dir_rel) != "." else filename
+                paths.append(rel)
+                if len(paths) > max_files:
+                    raise FingerprintError(
+                        f"project contains more than {max_files} files; "
+                        "fingerprinting aborted"
+                    )
+    except TraversalLimitError as error:
+        raise FingerprintError(
+            f"project contains more than {max_files} files or bounded entries; "
+            "fingerprinting aborted"
+        ) from error
     return paths
 
 

@@ -7,7 +7,6 @@ import pytest
 from burhan.model_v3 import (
     ProofCertificateV3,
     ProvenanceV3,
-    SBOMEntry,
     TestOutcome,
     compute_input_fingerprint,
     compute_patch_fingerprint,

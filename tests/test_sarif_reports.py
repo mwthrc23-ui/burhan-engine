@@ -6,7 +6,6 @@ Covers mandatory test case:
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -196,6 +195,15 @@ class WriteSarifTests(unittest.TestCase):
             write_sarif(self._doc(), out)
             tmp_files = list(Path(tmp).glob("*.tmp"))
             self.assertEqual(len(tmp_files), 0)
+
+    def test_predictable_tmp_symlink_is_not_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside.txt"
+            outside.write_text("unchanged", encoding="utf-8")
+            (root / "report.tmp").symlink_to(outside)
+            write_sarif(self._doc(), root / "report.sarif")
+            self.assertEqual(outside.read_text(encoding="utf-8"), "unchanged")
 
 
 if __name__ == "__main__":
