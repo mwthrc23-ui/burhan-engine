@@ -61,10 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--dependency", action="append", default=[], help="اعتماد موجود في سياق الخطأ")
     analyze.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
     analyze.add_argument("--code-tree", action="store_true", help="أضف شجرة الكود إلى المخرجات")
+    analyze.add_argument("--explain", action="store_true", help="اعرض شرحًا مفصّلًا للتشخيص والدليل بالعربية")
     repair = subcommands.add_parser("repair", help="شخّص وأنشئ patch آمنًا لمعاينته")
     _add_case_arguments(repair)
     repair.add_argument("--apply", action="store_true", help="طبّق patch بعد اجتياز تحقق V0")
     repair.add_argument("--json", action="store_true", help="أخرج النتيجة بصيغة JSON")
+    repair.add_argument("--explain", action="store_true", help="اعرض شرحًا مفصّلًا للتشخيص والإصلاح بالعربية")
     proof = subcommands.add_parser(
         "repair-proof",
         help="أثبت انتقال اختبار موثوق من الفشل إلى النجاح دون تعديل الأصل",
@@ -180,6 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="أقصى عمق للشجرة (0 = غير محدود)",
     )
     code_tree.add_argument("--json", action="store_true", help="أخرج الشجرة بصيغة JSON")
+    doctor = subcommands.add_parser(
+        "doctor",
+        help="افحص توفر Docker والأدوات والصور والسياسات قبل بدء الإثبات",
+    )
+    doctor.add_argument("--json", action="store_true", help="أخرج نتيجة الفحص بصيغة JSON")
     return parser
 
 
@@ -246,6 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _source_import_github_pr(args)
     if args.command == "source-search":
         return _source_search(args)
+    if args.command == "doctor":
+        return _doctor(args)
     if args.command == "code-tree":
         return _code_tree(args)
     if args.command == "repair-proof":
@@ -282,6 +291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_analysis(result)
+        if getattr(args, "explain", False):
+            _print_explain(result, patch)
         if args.command == "analyze" and getattr(args, "code_tree", False) and result.code_tree is not None:
             print("شجرة الكود:")
             lines: list[str] = []
@@ -838,6 +849,106 @@ def _read_error(error: str | None, error_file: Path | None) -> str:
     if error_file is None:
         raise ValueError("error input is required")
     return _read_limited_text(error_file, limit=1_000_000)
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    """Check Docker availability, tool versions, and policy configuration."""
+    import shutil
+
+    checks: dict[str, object] = {}
+
+    # Docker availability
+    docker_path = shutil.which("docker")
+    checks["docker_available"] = docker_path is not None
+    checks["docker_path"] = docker_path or "غير موجود"
+
+    # Python version
+    import sys as _sys
+    checks["python_version"] = _sys.version.split()[0]
+    checks["python_path"] = _sys.executable
+
+    # Burhan engine version
+    checks["burhan_version"] = ENGINE_VERSION
+
+    # Default Docker images
+    checks["default_docker_image"] = DEFAULT_DOCKER_IMAGE
+    checks["pytest_docker_image"] = PYTEST_DOCKER_IMAGE
+
+    # Digest validation
+    from .patcher import PINNED_DOCKER_IMAGE_PATTERN
+    checks["default_image_pinned"] = bool(PINNED_DOCKER_IMAGE_PATTERN.fullmatch(DEFAULT_DOCKER_IMAGE))
+
+    # Intelligence providers
+    try:
+        from .intelligence import LocalProvider
+        local = LocalProvider()
+        checks["local_intelligence_available"] = local.is_available()
+    except Exception as exc:
+        checks["local_intelligence_available"] = False
+        checks["local_intelligence_error"] = str(exc)
+
+    all_ok = all(
+        v is True or (isinstance(v, bool) and v)
+        for k, v in checks.items()
+        if k.endswith("_available") or k.endswith("_pinned")
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps({"status": "ok" if all_ok else "warning", "checks": checks}, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'✓' if all_ok else '⚠'} فحص بُرهان Doctor")
+        print(f"  الإصدار: {checks['burhan_version']}")
+        print(f"  Python:  {checks['python_version']} ({checks['python_path']})")
+        docker_ok = checks["docker_available"]
+        print(f"  Docker:  {'متوفر ✓' if docker_ok else 'غير متوفر ✗'}")
+        pinned = checks["default_image_pinned"]
+        print(f"  الصورة الافتراضية مثبتة: {'نعم ✓' if pinned else 'لا ✗'}")
+        intel_ok = checks.get("local_intelligence_available", False)
+        print(f"  مزود الذكاء المحلي: {'جاهز ✓' if intel_ok else 'غير متاح ✗'}")
+        if not all_ok:
+            print("  تحذير: بعض المكونات غير جاهزة – تحقق من إعداد البيئة.")
+
+    return 0 if all_ok else 1
+
+
+def _print_explain(result: object, patch: object | None) -> None:
+    """Print a structured Arabic explanation of the diagnosis and repair."""
+    from .model import AnalysisResult
+    from .patcher import PatchResult
+    if not isinstance(result, AnalysisResult):
+        return
+    primary = result.primary
+    print()
+    print("=" * 60)
+    print("  شرح التشخيص (--explain)")
+    print("=" * 60)
+    print(f"ماذا حدث؟\n  {primary.explanation}")
+    print(f"\nالسبب المرجح:\n  نوع الخطأ: {primary.kind}  |  الهدف: {primary.target}")
+    if primary.location:
+        print(f"  الموقع: {primary.location}")
+    print(f"\nمستوى الثقة: {primary.confidence:.0%}  |  طاقة الافتراض: {primary.energy:.2f}")
+    if primary.evidence:
+        print("\nالأدلة:")
+        for ev in primary.evidence:
+            prefix = "  [دعم]" if not ev.source.startswith("opposing:") else "  [معارض]"
+            print(f"{prefix} {ev.source}: {ev.summary}")
+    if primary.suggested_replacement:
+        print(f"\nالاستبدال المقترح: '{primary.target}' → '{primary.suggested_replacement}'")
+    if result.residual_risks:
+        print("\nالمخاطر المتبقية:")
+        for risk in result.residual_risks:
+            print(f"  ⚠ {risk}")
+    if result.questions:
+        print("\nأسئلة للمتابعة:")
+        for q in result.questions:
+            print(f"  ? {q}")
+    if isinstance(patch, PatchResult):
+        print(f"\nالتغييرات: {len(patch.changed_files)} ملف")
+        for f in patch.changed_files:
+            print(f"  - {f}")
+    else:
+        print("\nما لم يُثبت بعد:\n  لم تُشغَّل اختبارات التحقق.")
+    print("=" * 60)
 
 
 def _code_tree(args: argparse.Namespace) -> int:

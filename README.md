@@ -431,3 +431,58 @@ python -m unittest discover -s tests -v
 2. إعادة نتيجة الاختبار إلى BIR كدليل جديد قابل للاسترجاع.
 3. بناء صورة تحقق pytest مثبتة بالاعتماديات وdigest.
 4. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+
+## الأوامر الجديدة (v0.8.0)
+
+### `burhan doctor`
+
+يفحص توفر Docker والأدوات والصور والسياسات:
+
+```bash
+burhan doctor
+burhan doctor --json
+```
+
+### `--explain`
+
+يضيف شرحًا مفصلًا بالعربية لأوامر `analyze` و`repair`:
+
+```bash
+burhan analyze --project . --goal "شخّص" --error-file err.txt --explain
+burhan repair  --project . --goal "أصلح" --error-file err.txt --explain
+```
+
+يعرض الملخص النهائي: ماذا حدث؟ / السبب / الدليل / التغييرات / الاختبارات / ما لم يُثبت.
+
+## البنية المعمارية (v0.8.0)
+
+```text
+src/burhan/
+├── model.py              نماذج BIR الأساسية
+├── scanner.py            مسح المشروع متزايد
+├── analyzer.py           تشخيص الأخطاء
+├── patcher.py            إنشاء الرقعة وإثباتها
+├── policy.py             سياسات CI Gate
+├── memory.py             ذاكرة الإصلاح + TrustLevel
+├── cli.py                واجهة سطر الأوامر
+├── evidence.py           رسم الأدلة V2 (EvidenceGraph)
+├── index/                فهرسة دلالية (Python + TypeScript)
+├── diagnosis/            محرك فرضيات متعدد المرشحين
+├── candidates/           توليد مرشحي الإصلاح وترتيبهم
+├── sandbox/              التحقق من قيود Docker
+├── verification/         حلقة الإصلاح المحدودة
+├── intelligence/         مزود ذكاء اختياري (محلي + LLM stub)
+└── reports/              تقارير SARIF
+```
+
+## مستويات الثقة في ذاكرة الإصلاح
+
+| المستوى | المعنى |
+|---------|--------|
+| `raw_source` | بيانات مستوردة من مصدر خارجي، غير محققة محليًا |
+| `unverified_local` | مرشح اقترحه المحرك ولم يُثبت بعد |
+| `locally_proven` | أُثبت بانتقال حقيقي (فشل→نجاح) داخل Docker |
+| `human_reviewed` | خضع إضافةً إلى ذلك لمراجعة بشرية |
+
+لا تظهر في نتائج البحث إلا الحالات ذات مصدر موثوق (`curated` أو `source_asserted`).
+
