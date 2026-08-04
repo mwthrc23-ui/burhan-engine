@@ -19,7 +19,7 @@ Notes
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 SARIF_VERSION = "2.1.0"
@@ -30,13 +30,17 @@ TOOL_URI = "https://github.com/mwthrc23-ui/burhan-engine"
 
 def _sanitise_path(path: str) -> str:
     """Return a relative POSIX path, stripping any absolute component."""
-    # Ensure the path is relative and uses forward slashes
-    p = Path(path)
-    if p.is_absolute():
+    # Detect both POSIX and Windows absolute paths regardless of the host OS.
+    # pathlib.Path alone follows host semantics, so ``/home/...`` was treated
+    # as relative when the release pre-push tests ran on Windows.
+    normalised = path.replace("\\", "/")
+    posix_path = PurePosixPath(normalised)
+    windows_path = PureWindowsPath(path)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
         # Return only the last two components to avoid leaking directory trees
-        parts = p.parts
-        return "/".join(parts[-2:]) if len(parts) >= 2 else p.name
-    return path.replace("\\", "/")
+        parts = tuple(part for part in normalised.split("/") if part and not part.endswith(":"))
+        return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else "")
+    return normalised
 
 
 def _make_rule(kind: str, explanation: str) -> dict[str, Any]:

@@ -94,6 +94,13 @@ class SarifDocumentTests(unittest.TestCase):
         uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
         self.assertFalse(uri.startswith("/"), f"absolute path leaked: {uri}")
 
+    def test_windows_absolute_path_stripped(self) -> None:
+        hyps = [{"kind": "undefined_name", "explanation": "err", "location": r"C:\Users\person\project\src\app.py:5", "confidence": 0.9}]
+        doc = hypotheses_to_sarif(hyps, "0.8.0", "case-abc")
+        result = doc["runs"][0]["results"][0]
+        uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        self.assertEqual(uri, "src/app.py")
+
     def test_engine_version_in_tool_driver(self) -> None:
         doc = hypotheses_to_sarif([], "1.2.3", "case-abc")
         self.assertEqual(doc["runs"][0]["tool"]["driver"]["version"], "1.2.3")
