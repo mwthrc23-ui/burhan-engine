@@ -52,7 +52,7 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         self.assertNotIn("packages: write", top_level)
         self.assertIn("packages: write", docker_job)
 
-    def test_project_declares_agpl_v3_license(self) -> None:
+    def test_project_declares_custom_attribution_license(self) -> None:
         project = Path(__file__).parents[1]
         config = tomllib.loads(
             (project / "pyproject.toml").read_text(encoding="utf-8")
@@ -61,9 +61,8 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         license_text = (project / "LICENSE").read_text(encoding="utf-8")
 
         self.assertEqual(config["build-system"]["requires"], ["setuptools==82.0.1"])
-        self.assertEqual(metadata["license"], "AGPL-3.0-only")
-        self.assertIn("GNU AFFERO GENERAL PUBLIC LICENSE", license_text)
-        self.assertIn("Version 3, 19 November 2007", license_text)
+        self.assertEqual(metadata["license"], "LicenseRef-Custom-Attribution")
+        self.assertIn("Custom Attribution License", license_text)
 
     def test_docker_context_excludes_secrets_and_tool_state(self) -> None:
         project = Path(__file__).parents[1]

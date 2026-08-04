@@ -26,7 +26,7 @@ def _make_cert(
         issued_at_utc="2026-08-04T00:00:00Z",
         issuer="burhan-engine",
         sbom=(
-            SBOMEntry(name="burhan-engine", version="0.9.0", ecosystem="pip", license_spdx="AGPL-3.0-only"),
+            SBOMEntry(name="burhan-engine", version="0.9.0", ecosystem="pip", license_spdx="LicenseRef-Custom-Attribution"),
         ),
     )
     before = (
