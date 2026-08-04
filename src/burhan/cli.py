@@ -767,7 +767,14 @@ def _terminal_text(value: str, *, multiline: bool = False) -> str:
             safe.append(f"\\u{codepoint:0{width}x}")
         else:
             safe.append(character)
-    return "".join(safe)
+    rendered = "".join(safe)
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not isinstance(encoding, str) or not encoding:
+        return rendered
+    try:
+        return rendered.encode(encoding, errors="backslashreplace").decode(encoding)
+    except LookupError:
+        return rendered
 
 
 def _print_json_or_summary(as_json: bool, result: dict[str, object]) -> None:
@@ -894,19 +901,28 @@ def _doctor(args: argparse.Namespace) -> int:
     )
 
     if getattr(args, "json", False):
-        print(json.dumps({"status": "ok" if all_ok else "warning", "checks": checks}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"status": "ok" if all_ok else "warning", "checks": checks},
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
     else:
-        print(f"{'✓' if all_ok else '⚠'} فحص بُرهان Doctor")
+        print(f"{'[OK]' if all_ok else '[WARN]'} فحص بُرهان Doctor")
         print(f"  الإصدار: {checks['burhan_version']}")
-        print(f"  Python:  {checks['python_version']} ({checks['python_path']})")
+        print(
+            f"  Python:  {_terminal_text(str(checks['python_version']))} "
+            f"({_terminal_text(str(checks['python_path']))})"
+        )
         docker_ok = checks["docker_available"]
-        print(f"  Docker:  {'متوفر ✓' if docker_ok else 'غير متوفر ✗'}")
+        print(f"  Docker:  {'متوفر [OK]' if docker_ok else 'غير متوفر [FAIL]'}")
         pinned = checks["default_image_pinned"]
-        print(f"  الصورة الافتراضية مثبتة: {'نعم ✓' if pinned else 'لا ✗'}")
+        print(f"  الصورة الافتراضية مثبتة: {'نعم [OK]' if pinned else 'لا [FAIL]'}")
         intel_ok = checks.get("local_intelligence_available", False)
-        print(f"  مزود الذكاء المحلي: {'جاهز ✓' if intel_ok else 'غير متاح ✗'}")
+        print(f"  مزود الذكاء المحلي: {'جاهز [OK]' if intel_ok else 'غير متاح [FAIL]'}")
         if not all_ok:
-            print("  تحذير: بعض المكونات غير جاهزة – تحقق من إعداد البيئة.")
+            print("  تحذير: بعض المكونات غير جاهزة - تحقق من إعداد البيئة.")
 
     return 0 if all_ok else 1
 
@@ -922,30 +938,40 @@ def _print_explain(result: object, patch: object | None) -> None:
     print("=" * 60)
     print("  شرح التشخيص (--explain)")
     print("=" * 60)
-    print(f"ماذا حدث؟\n  {primary.explanation}")
-    print(f"\nالسبب المرجح:\n  نوع الخطأ: {primary.kind}  |  الهدف: {primary.target}")
+    print(f"ماذا حدث؟\n  {_terminal_text(primary.explanation)}")
+    print(
+        "\nالسبب المرجح:\n"
+        f"  نوع الخطأ: {_terminal_text(primary.kind)}  |  "
+        f"الهدف: {_terminal_text(primary.target)}"
+    )
     if primary.location:
-        print(f"  الموقع: {primary.location}")
+        print(f"  الموقع: {_terminal_text(primary.location)}")
     print(f"\nمستوى الثقة: {primary.confidence:.0%}  |  طاقة الافتراض: {primary.energy:.2f}")
     if primary.evidence:
         print("\nالأدلة:")
         for ev in primary.evidence:
             prefix = "  [دعم]" if not ev.source.startswith("opposing:") else "  [معارض]"
-            print(f"{prefix} {ev.source}: {ev.summary}")
+            print(
+                f"{prefix} {_terminal_text(ev.source)}: "
+                f"{_terminal_text(ev.summary)}"
+            )
     if primary.suggested_replacement:
-        print(f"\nالاستبدال المقترح: '{primary.target}' → '{primary.suggested_replacement}'")
+        print(
+            f"\nالاستبدال المقترح: '{_terminal_text(primary.target)}' -> "
+            f"'{_terminal_text(primary.suggested_replacement)}'"
+        )
     if result.residual_risks:
         print("\nالمخاطر المتبقية:")
         for risk in result.residual_risks:
-            print(f"  ⚠ {risk}")
+            print(f"  [WARN] {_terminal_text(risk)}")
     if result.questions:
         print("\nأسئلة للمتابعة:")
         for q in result.questions:
-            print(f"  ? {q}")
+            print(f"  ? {_terminal_text(q)}")
     if isinstance(patch, PatchResult):
         print(f"\nالتغييرات: {len(patch.changed_files)} ملف")
         for f in patch.changed_files:
-            print(f"  - {f}")
+            print(f"  - {_terminal_text(str(f))}")
     else:
         print("\nما لم يُثبت بعد:\n  لم تُشغَّل اختبارات التحقق.")
     print("=" * 60)

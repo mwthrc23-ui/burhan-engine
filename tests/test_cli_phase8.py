@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _run(argv: list[str]) -> tuple[int, str, str]:
@@ -19,6 +20,22 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+def _run_with_stdout_encoding(argv: list[str], encoding: str) -> tuple[int, str, str]:
+    """Run CLI through a strict text stream that mimics a legacy console."""
+    from burhan.cli import main
+    stdout_bytes = io.BytesIO()
+    stdout = io.TextIOWrapper(stdout_bytes, encoding=encoding, errors="strict")
+    stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = main(argv)
+        stdout.flush()
+        output = stdout_bytes.getvalue().decode(encoding)
+    finally:
+        stdout.detach()
+    return code, output, stderr.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # burhan doctor command
 # ---------------------------------------------------------------------------
@@ -29,10 +46,15 @@ class DoctorCommandTests(unittest.TestCase):
         self.assertIn(code, (0, 1))
 
     def test_doctor_json_output_is_valid_json(self) -> None:
-        code, stdout, _ = _run(["doctor", "--json"])
+        with patch("sys.executable", "C:/ド/python.exe"):
+            code, stdout, _ = _run_with_stdout_encoding(
+                ["doctor", "--json"],
+                "cp1256",
+            )
         payload = json.loads(stdout)
         self.assertIn("status", payload)
         self.assertIn("checks", payload)
+        self.assertEqual(payload["checks"]["python_path"], "C:/ド/python.exe")
 
     def test_doctor_json_has_burhan_version(self) -> None:
         _, stdout, _ = _run(["doctor", "--json"])
@@ -61,6 +83,12 @@ class DoctorCommandTests(unittest.TestCase):
     def test_doctor_text_output_contains_python(self) -> None:
         _, stdout, _ = _run(["doctor"])
         self.assertIn("Python", stdout)
+
+    def test_doctor_text_output_supports_windows_cp1256(self) -> None:
+        with patch("sys.executable", "C:/ド/python.exe"):
+            code, stdout, _ = _run_with_stdout_encoding(["doctor"], "cp1256")
+        self.assertIn(code, (0, 1))
+        self.assertIn(r"\u30c9", stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +130,32 @@ class ExplainFlagTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _, stdout = self._run_analyze_explain(tmp)
             self.assertIn("المخاطر المتبقية", stdout)
+
+    def test_explain_supports_windows_cp1256(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "def greet(): pass\n\nprint(grete())\n",
+                encoding="utf-8",
+            )
+            err_file = root / "err.txt"
+            err_file.write_text(
+                "Traceback (most recent call last):\n"
+                "  File \"C:/tmp/ド/app.py\", line 3, in <module>\n"
+                "    print(grete())\n"
+                "NameError: name 'grete' is not defined",
+                encoding="utf-8",
+            )
+            code, stdout, _ = _run_with_stdout_encoding([
+                "analyze",
+                "--project", str(root),
+                "--goal", "شخّص الخطأ",
+                "--error-file", str(err_file),
+                "--explain",
+            ], "cp1256")
+            self.assertEqual(code, 0)
+            self.assertIn("'grete' -> 'greet'", stdout)
+            self.assertIn(r"\u30c9", stdout)
 
     def test_no_explain_flag_no_structured_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +223,7 @@ class BackwardCompatibilityTests(unittest.TestCase):
     def test_version_flag(self) -> None:
         _, stdout, stderr = _run(["--version"])
         combined = stdout + stderr
-        self.assertIn("0.8.0", combined)
+        self.assertIn("0.8.1", combined)
 
     def test_memory_promote_still_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
