@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from burhan.index.python_indexer import PythonIndexer, EnhancedIndexResult
+from burhan.index.python_indexer import PythonIndexer
 from burhan.index.typescript_indexer import TypeScriptIndexer
 from burhan.index.incremental_index import IncrementalIndex
 

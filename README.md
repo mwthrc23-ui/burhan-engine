@@ -11,7 +11,7 @@
 بُرهان محرك تشخيص وإثبات إصلاح يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة بدل التخمين.
 
 ```bash
-python -m pip install --upgrade "burhan-engine==0.8.1"
+python -m pip install --upgrade "burhan-engine==0.9.0"
 burhan --version
 burhan doctor
 ```
@@ -20,9 +20,9 @@ burhan doctor
 - ينشئ معاينة إصلاح صغيرة من دون تغيير الأصل افتراضيًا.
 - يثبت انتقال الاختبار من الفشل إلى النجاح داخل Docker مع عزل وحدود موارد.
 
-[PyPI 0.8.1](https://pypi.org/project/burhan-engine/0.8.1/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Release v0.8.1](https://github.com/mwthrc23-ui/burhan-engine/releases/tag/v0.8.1) · [License](LICENSE) · [Security policy](SECURITY.md)
+[PyPI 0.9.0](https://pypi.org/project/burhan-engine/0.9.0/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Release v0.9.0](https://github.com/mwthrc23-ui/burhan-engine/releases/tag/v0.9.0) · [License](LICENSE) · [Security policy](SECURITY.md)
 
-تجمع النسخة `0.8.1` بين **Burhan Evidence Gate** و**Evidence Graph V2** ومحرك الفرضيات متعددة المرشحين والـsandbox وتقارير SARIF ومزود المعلومات المحلي وأمر `burhan doctor`، وتصحح توافق المخرجات النصية مع طرفيات Windows ذات ترميز `cp1256`. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
+تضيف النسخة `0.9.0` بنشمارك تشخيصيًا قابلًا للتكرار، وفهرسة متزايدة، وعائلات تشخيص أعمق لـKeyError وasync وTypeScript، ونماذج شهادة V3 وحماية إضافية لمدخلات مزود الذكاء. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، ومزود LLM الاختياري ما زال stub معطلًا افتراضيًا.
 
 حقوق النشر © 2026 مساهمو Burhan Engine. بُرهان برنامج حر ومفتوح المصدر مرخص بموجب `AGPL-3.0-only`. إذا وزعت نسخة معدلة، أو أتحت نسخة معدلة ليتفاعل معها المستخدمون عبر شبكة، فيجب أن تتيح لهم المصدر المقابل لتلك النسخة وفق شروط [الترخيص](LICENSE).
 
@@ -31,15 +31,15 @@ burhan doctor
 ### 1) تثبيت الأداة محليًا (PyPI/Editable)
 
 ```bash
-python -m pip install --upgrade "burhan-engine==0.8.1"
+python -m pip install --upgrade "burhan-engine==0.9.0"
 burhan --version
 burhan doctor
 ```
 
-يجب أن يعرض `burhan --version` القيمة `burhan 0.8.1`. يعرض `doctor` نسخة Python، ووجود Docker CLI، وصيغة تثبيت صورة الإثبات، وحالة المزود المحلي؛ لكنه لا يثبت أن Docker daemon يعمل أو أن الصورة قابلة للسحب. استخدم `docker info` و`docker manifest inspect IMAGE` للتحقق التشغيلي. وللتحقق من الحزمة المنشورة بعيدًا عن ملفات المستودع:
+يجب أن يعرض `burhan --version` القيمة `burhan 0.9.0`. يعرض `doctor` نسخة Python، ووجود Docker CLI، وصيغة تثبيت صورة الإثبات، وحالة المزود المحلي؛ لكنه لا يثبت أن Docker daemon يعمل أو أن الصورة قابلة للسحب. استخدم `docker info` و`docker manifest inspect IMAGE` للتحقق التشغيلي. وللتحقق من الحزمة المنشورة بعيدًا عن ملفات المستودع:
 
 ```bash
-uvx --refresh --from "burhan-engine==0.8.1" burhan --version
+uvx --refresh --from "burhan-engine==0.9.0" burhan --version
 ```
 
 وللتطوير المحلي من المستودع:
@@ -74,22 +74,16 @@ burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" -
 اسحب الصورة المنشورة:
 
 ```bash
-docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.8.1
-docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.8.1 --version
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.9.0
+docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.9.0 --version
 ```
 
-البصمة المنشورة للإصدار `0.8.1` هي:
-
-```text
-ghcr.io/mwthrc23-ui/burhan-engine@sha256:b7c0c7c13da511eeffb29df9eee75dd14178a346b72737e2136f7bf489b898a1
-```
-
-استخدم مرجع البصمة بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
+بعد النشر، خذ بصمة الصورة من صفحة الحزمة أو من `docker inspect` واستخدم مرجع `@sha256:...` بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.8.1 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.9.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -124,7 +118,7 @@ burhan ci-gate \
 
 يجب كذلك فصل **أداة بُرهان الموثوقة** عن **المستودع الجاري تحليله**: في workflow المحمي ثبّت نسخة منشورة ومثبتة من `burhan-engine` أو wheel من بناء محمي، ولا تثبّت بُرهان من checkout الخاص بالـPR. في البيئات عالية الحساسية استخدم `--require-hashes` مع بصمة wheel المنشورة.
 
-لا تحتوي حزمة `0.8.1` اعتماديات تشغيل خارجية، لذلك يستخدم المثال التالي `--no-deps`. أعد فحص metadata قبل نسخ هذا الخيار إلى إصدار لاحق؛ لا تستخدمه إذا أضيفت اعتماديات مطلوبة.
+لا تحتوي حزمة `0.9.0` اعتماديات تشغيل خارجية، لذلك يستخدم المثال التالي `--no-deps`. أعد فحص metadata قبل نسخ هذا الخيار إلى إصدار لاحق؛ لا تستخدمه إذا أضيفت اعتماديات مطلوبة.
 
 مثال GitHub Actions مختصر:
 
@@ -133,7 +127,7 @@ burhan ci-gate \
   env:
     BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
   run: |
-    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.8.1"
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.9.0"
     docker pull "$BURHAN_DOCKER_IMAGE"
 - name: Load protected Burhan policy
   env:
@@ -412,7 +406,7 @@ python -m coverage run -m pytest -q
 python -m coverage report
 ```
 
-خط الأساس الموثق للإصدار `0.8.1`: **372 اختبارًا ناجحًا**، إضافةً إلى **18 subtest**، وتغطية إجمالية **93%**.
+خط الأساس الموثق للإصدار `0.9.0`: **549 اختبارًا ناجحًا**، إضافةً إلى **18 subtest**، وتغطية مصدرية **89%**. يشغّل CI المجموعة الكاملة عبر pytest ويفرض تغطية لا تقل عن 80%، ثم يشغّل بوابة البنشمارك.
 
 ## نموذج BIR الحالي
 
@@ -457,6 +451,15 @@ python -m coverage report
 1. استعادة بوابة الترقية بإعادة إثبات `AttributeError` وربط `ProofResult` بالحالة والرقعة، مع سبب من المصدر أو مراجعة بشرية موثقة وإثبات `V2`.
 2. بناء صورة تحقق pytest منشورة ومثبتة بالاعتماديات وdigest بدل قيمة placeholder الحالية.
 3. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+
+## ما الجديد في 0.9.0
+
+- بنشمارك محلي ثابت يضم 56 حالة عبر 10 عائلات أخطاء، مع أمر `burhan benchmark` وبوابة CI. يقيس Top-1 وTop-3 **للتشخيص**، ولا يدّعي إثبات نجاح الرقعة أو تشغيل sandbox. لا تحتوي suite الحالية negative controls، لذلك يعرض `False+` القيمة `n/a` بدل نسبة غير مقاسة.
+- ربط معالجات KeyError وasync ومخرجات TypeScript القياسية بمسار `BurhanAnalyzer`، بما في ذلك TS2304 وTS2322 وTS2339 وTS2345 وTS2554.
+- فهرسة متزايدة بذاكرة LRU، وفهرسة Python أوسع للوراثة ومواضع الاستخدام ورموز الاختبارات.
+- نماذج `ProofCertificateV3` وبصمة مشروع SHA-256 محمية من الروابط الرمزية، مع اختبارات تمنع الترقية الزائفة وتغير المشروع. هذه واجهات برمجية في 0.9.0 وليست مسار CLI مكتملًا بعد.
+- تنقيح الأسرار ومسارات الملفات قبل تمرير السياق إلى مزود LLM الاختياري؛ المزود يظل stub معطلًا افتراضيًا.
+- بوابات إصدار أشد: Ruff، و549 اختبارًا، وتغطية مصدرية 89%، وبنشمارك تشخيصي 56/56 قبل بناء الحزمة أو نشرها.
 
 ## ما الجديد في 0.8.1
 
@@ -549,12 +552,14 @@ src/burhan/
 ├── memory.py             ذاكرة الإصلاح + TrustLevel
 ├── cli.py                واجهة سطر الأوامر
 ├── evidence.py           رسم الأدلة V2 (EvidenceGraph)
+├── benchmark/            بنشمارك التشخيص المحلي
 ├── index/                فهرسة دلالية (Python + TypeScript)
 ├── diagnosis/            محرك فرضيات متعدد المرشحين
 ├── candidates/           توليد مرشحي الإصلاح وترتيبهم
 ├── sandbox/              التحقق من قيود Docker
 ├── verification/         حلقة الإصلاح المحدودة
 ├── intelligence/         مزود ذكاء اختياري (محلي + LLM stub)
+├── model_v3.py           نموذج شهادة الإثبات V3 (واجهة برمجية)
 └── reports/              تقارير SARIF
 ```
 

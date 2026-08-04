@@ -9,10 +9,7 @@ Covers mandatory test cases:
 """
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
-from dataclasses import replace
 
 from burhan.diagnosis.hypothesis_engine import HypothesisEngine
 from burhan.candidates.repair_candidates import (
@@ -225,10 +222,9 @@ class RepairCandidatesTests(unittest.TestCase):
         location: str | None = "app.py:10",
         replacement: str | None = "foo_bar",
     ) -> Hypothesis:
-        from burhan.energy import confidence_from_energy, hypothesis_energy
+        from burhan.energy import hypothesis_energy
         ev = (Evidence("runtime", "NameError detected", 2.5),)
         energy = hypothesis_energy(ev, uncertainty=0.1, unresolved_constraints=0, estimated_change_size=1)
-        conf = confidence_from_energy(energy, len(ev))
         return Hypothesis(
             kind=kind,
             target=target,

@@ -1,7 +1,6 @@
 """Tests for encoding safety (Phase security)."""
 from __future__ import annotations
 
-import pytest
 
 from burhan.intelligence.llm_provider import redact_secrets
 

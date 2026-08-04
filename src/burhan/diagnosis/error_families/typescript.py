@@ -4,6 +4,7 @@ Handles four common TypeScript compiler errors:
 
 * TS2304 — Cannot find name (missing symbol / import)
 * TS2339 — Property does not exist on type
+* TS2322 — Assignment type mismatch
 * TS2345 — Argument type mismatch
 * TS2554 — Expected N arguments but got M
 """
@@ -28,6 +29,10 @@ _TS2339 = re.compile(
 _TS2345 = re.compile(
     r"TS2345:\s+Argument of type\s+['\"](?P<from_type>[^'\"]+)['\"]"
     r"\s+is not assignable to parameter of type\s+['\"](?P<to_type>[^'\"]+)['\"]"
+)
+_TS2322 = re.compile(
+    r"TS2322:\s+Type\s+['\"](?P<from_type>[^'\"]+)['\"]"
+    r"\s+is not assignable to type\s+['\"](?P<to_type>[^'\"]+)['\"]"
 )
 _TS2554 = re.compile(
     r"TS2554:\s+Expected\s+(?P<expected>\d+)\s+arguments?,\s+but got\s+(?P<got>\d+)"
@@ -99,6 +104,14 @@ class TypeScriptErrorHandler:
         m = _TS2345.search(error_text)
         if m:
             hypotheses.extend(self._type_mismatch(m.group("from_type"), m.group("to_type")))
+
+        m = _TS2322.search(error_text)
+        if m:
+            hypotheses.extend(
+                self._assignment_type_mismatch(
+                    m.group("from_type"), m.group("to_type")
+                )
+            )
 
         m = _TS2554.search(error_text)
         if m:
@@ -296,6 +309,45 @@ class TypeScriptErrorHandler:
         ]
 
     @staticmethod
+    def _assignment_type_mismatch(
+        from_type: str, to_type: str
+    ) -> list[TSHypothesis]:
+        return [
+            TSHypothesis(
+                kind="typescript_type_mismatch",
+                sub_kind="assignment_type_mismatch",
+                explanation=(
+                    f"Value of type '{from_type}' cannot be assigned to '{to_type}'."
+                ),
+                confidence=0.90,
+                supporting=(
+                    f"TS2322: '{from_type}' is not assignable to '{to_type}'",
+                ),
+                opposing=(),
+                candidates=(
+                    TSCandidate(
+                        rank=1,
+                        description=f"Use a value compatible with {to_type}",
+                        code_template=f"const value: {to_type} = /* compatible value */;",
+                        confidence=0.85,
+                    ),
+                    TSCandidate(
+                        rank=2,
+                        description=f"Widen the declared type to include {from_type}",
+                        code_template=f"const value: {to_type} | {from_type} = input;",
+                        confidence=0.60,
+                    ),
+                    TSCandidate(
+                        rank=3,
+                        description="Narrow or validate the value before assignment",
+                        code_template="if (isExpectedType(input)) { value = input; }",
+                        confidence=0.50,
+                    ),
+                ),
+            )
+        ]
+
+    @staticmethod
     def _param_count(expected: int, got: int) -> list[TSHypothesis]:
         diff = got - expected
         if diff > 0:
@@ -326,7 +378,7 @@ class TypeScriptErrorHandler:
                     TSCandidate(
                         rank=2,
                         description="Make extra parameters optional in the function signature",
-                        code_template=f"function f(a: T, b?: T2) {{}}  // make param optional",
+                        code_template="function f(a: T, b?: T2) {}  // make param optional",
                         confidence=0.60,
                     ),
                     TSCandidate(

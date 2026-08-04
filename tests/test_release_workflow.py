@@ -60,10 +60,25 @@ class ReleaseWorkflowSecurityTests(unittest.TestCase):
         metadata = config["project"]
         license_text = (project / "LICENSE").read_text(encoding="utf-8")
 
-        self.assertIn("setuptools>=77", config["build-system"]["requires"])
+        self.assertEqual(config["build-system"]["requires"], ["setuptools==82.0.1"])
         self.assertEqual(metadata["license"], "AGPL-3.0-only")
         self.assertIn("GNU AFFERO GENERAL PUBLIC LICENSE", license_text)
         self.assertIn("Version 3, 19 November 2007", license_text)
+
+    def test_docker_context_excludes_secrets_and_tool_state(self) -> None:
+        project = Path(__file__).parents[1]
+        dockerignore = (project / ".dockerignore").read_text(encoding="utf-8")
+        self.assertIn(".env", dockerignore.splitlines())
+        self.assertIn(".env.*", dockerignore.splitlines())
+        self.assertIn(".serena", dockerignore.splitlines())
+
+    def test_docker_base_image_is_pinned_by_digest(self) -> None:
+        project = Path(__file__).parents[1]
+        dockerfile = (project / "Dockerfile").read_text(encoding="utf-8")
+        self.assertRegex(
+            dockerfile.splitlines()[0],
+            r"^FROM python:3\.12-slim@sha256:[0-9a-f]{64}$",
+        )
 
 
 if __name__ == "__main__":

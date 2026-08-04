@@ -1,7 +1,6 @@
 """Tests for error family handlers (Phase 3)."""
 from __future__ import annotations
 
-import pytest
 
 from burhan.diagnosis.error_families.key_error import KeyErrorHandler
 from burhan.diagnosis.error_families.async_error import AsyncErrorHandler
@@ -162,6 +161,12 @@ class TestTypeScriptErrorHandler:
         )
         result = self.handler.diagnose(error)
         assert result[0].kind == "typescript_type_mismatch"
+
+    def test_ts2322_assignment_type_mismatch(self) -> None:
+        error = "error TS2322: Type 'null' is not assignable to type 'string'."
+        result = self.handler.diagnose(error)
+        assert result[0].kind == "typescript_type_mismatch"
+        assert result[0].sub_kind == "assignment_type_mismatch"
 
     def test_ts2554_param_count(self) -> None:
         error = "error TS2554: Expected 2 arguments, but got 3."

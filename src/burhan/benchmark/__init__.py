@@ -2,7 +2,7 @@
 
 Provides a reproducible benchmark suite and runner to measure:
 - Diagnostic accuracy
-- Top-1 and Top-3 repair success rates
+- Top-1 and Top-3 diagnostic success rates
 - False positive rate
 - Analysis latency
 - Patch pass rates (narrow test + full regression)

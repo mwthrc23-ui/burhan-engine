@@ -1,6 +1,11 @@
 .git
 .github
 .venv
+.env
+.env.*
+.serena
+.coverage
+coverage.xml
 __pycache__
 *.py[cod]
 *.sqlite3

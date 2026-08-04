@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from burhan.verification.project_fingerprint import (
     fingerprint_project,

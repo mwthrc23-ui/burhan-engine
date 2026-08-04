@@ -5,6 +5,8 @@ satisfy all assertions.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from burhan.benchmark.suite import (
@@ -13,7 +15,7 @@ from burhan.benchmark.suite import (
     VALID_FAMILIES,
     load_suite,
 )
-from burhan.benchmark.runner import BenchmarkRunner, BenchmarkResult, CaseResult
+from burhan.benchmark.runner import BenchmarkRunner, BenchmarkResult
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +114,13 @@ class TestBenchmarkSuite:
 # ---------------------------------------------------------------------------
 
 class TestBenchmarkRunner:
+    def test_live_suite_meets_release_accuracy_gate(self) -> None:
+        """The shipped benchmark must exercise the live analyzer successfully."""
+        result = BenchmarkRunner().run()
+        assert not [case for case in result.case_results if case.error]
+        assert result.diagnostic_accuracy >= 0.90
+        assert result.top1_success >= 0.90
+
     def test_runner_produces_benchmark_result(self) -> None:
         runner = BenchmarkRunner()
         result = runner.run()
@@ -122,6 +131,11 @@ class TestBenchmarkRunner:
         runner = BenchmarkRunner(suite=suite)
         result = runner.run()
         assert result.total_cases == len(suite)
+
+    def test_curated_count_matches_suite_metadata(self) -> None:
+        suite = load_suite()
+        result = BenchmarkRunner(suite=suite).run()
+        assert result.curated_cases == len(suite.curated_only())
 
     def test_result_families_covered_at_least_8(self) -> None:
         runner = BenchmarkRunner()
@@ -144,6 +158,11 @@ class TestBenchmarkRunner:
         ):
             value = getattr(result, attr)
             assert 0.0 <= value <= 1.0, f"{attr} = {value} out of [0, 1]"
+
+    def test_default_suite_does_not_claim_false_positive_measurement(self) -> None:
+        result = BenchmarkRunner().run()
+        assert result.negative_control_cases == 0
+        assert "n/a" in "\n".join(result.summary_lines())
 
     def test_mean_latency_non_negative(self) -> None:
         runner = BenchmarkRunner()
@@ -214,3 +233,47 @@ class TestBenchmarkRunner:
         result = runner.run()
         assert result.total_cases == 0
         assert result.diagnostic_accuracy == 0.0
+
+    def test_typescript_family_is_compared_as_typescript(self) -> None:
+        """A TS undefined-name diagnosis must not be scored as Python NameError."""
+        case = BenchmarkCase(
+            case_id="ts-family",
+            language="typescript",
+            error_family="typescript_missing_symbol",
+            error_text="error TS2304: Cannot find name 'Widget'.",
+            source_snippet="const x = Widget;",
+            expected_error_family="typescript_missing_symbol",
+            expected_top1_kind="typescript_missing_symbol",
+            curated=True,
+            ground_truth_repair="Import Widget",
+        )
+        result = BenchmarkRunner(suite=BenchmarkSuite(cases=(case,))).run()
+        assert result.case_results[0].correct_top1 is True
+
+    def test_false_positive_rate_counts_confident_negative_control_case(self) -> None:
+        """Only cases with no expected family are negative controls."""
+        from unittest.mock import MagicMock
+
+        case = BenchmarkCase(
+            case_id="fp-family",
+            language="python",
+            error_family="import_error",
+            error_text="benign log line with no diagnostic target",
+            source_snippet="print('ok')",
+            expected_error_family="",
+            expected_top1_kind="",
+            curated=False,
+        )
+        mock_analyzer = MagicMock()
+        mock_analyzer.analyze.return_value = SimpleNamespace(
+            hypotheses=(SimpleNamespace(kind="undefined_name", confidence=0.95),)
+        )
+
+        result = BenchmarkRunner(
+            analyzer=mock_analyzer,
+            suite=BenchmarkSuite(cases=(case,)),
+        ).run()
+
+        assert result.false_positive_rate == 1.0
+        assert result.negative_control_cases == 1
+        assert result.case_results[0].is_false_positive is True
