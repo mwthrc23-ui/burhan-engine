@@ -11,17 +11,18 @@
 بُرهان محرك تشخيص وإثبات إصلاح يحوّل هدف المستخدم والكود ورسالة الخطأ إلى حالة BIR مترابطة، ثم يرتب فرضيات السبب الجذري باستخدام الأدلة بدل التخمين.
 
 ```bash
-python -m pip install burhan-engine
-burhan --help
+python -m pip install --upgrade "burhan-engine==0.8.1"
+burhan --version
+burhan doctor
 ```
 
 - يشخّص الأخطاء ويعرض الأدلة والمخاطر المتبقية.
 - ينشئ معاينة إصلاح صغيرة من دون تغيير الأصل افتراضيًا.
 - يثبت انتقال الاختبار من الفشل إلى النجاح داخل Docker مع عزل وحدود موارد.
 
-[PyPI](https://pypi.org/project/burhan-engine/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Releases](https://github.com/mwthrc23-ui/burhan-engine/releases) · [License](LICENSE) · [Security policy](SECURITY.md)
+[PyPI 0.8.1](https://pypi.org/project/burhan-engine/0.8.1/) · [Docker image](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine) · [Release v0.8.1](https://github.com/mwthrc23-ui/burhan-engine/releases/tag/v0.8.1) · [License](LICENSE) · [Security policy](SECURITY.md)
 
-هذه النسخة `0.8.0` توفر **Burhan Evidence Gate**: بوابة CI تطبق سياسة مؤسسية على إثبات الإصلاح وتصدر تقرير قرار منقحًا وقابلًا للأرشفة. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
+تجمع النسخة `0.8.1` بين **Burhan Evidence Gate** و**Evidence Graph V2** ومحرك الفرضيات متعددة المرشحين والـsandbox وتقارير SARIF ومزود المعلومات المحلي وأمر `burhan doctor`، وتصحح توافق المخرجات النصية مع طرفيات Windows ذات ترميز `cp1256`. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، وجامع المصادر يتصل فقط بمضيفي SWE-bench وGitHub المسموحين صراحة ولا يحتاج مفاتيح API.
 
 حقوق النشر © 2026 مساهمو Burhan Engine. بُرهان برنامج حر ومفتوح المصدر مرخص بموجب `AGPL-3.0-only`. إذا وزعت نسخة معدلة، أو أتحت نسخة معدلة ليتفاعل معها المستخدمون عبر شبكة، فيجب أن تتيح لهم المصدر المقابل لتلك النسخة وفق شروط [الترخيص](LICENSE).
 
@@ -30,8 +31,15 @@ burhan --help
 ### 1) تثبيت الأداة محليًا (PyPI/Editable)
 
 ```bash
-python -m pip install burhan-engine
-burhan --help
+python -m pip install --upgrade "burhan-engine==0.8.1"
+burhan --version
+burhan doctor
+```
+
+يجب أن يعرض `burhan --version` القيمة `burhan 0.8.1`. يعرض `doctor` نسخة Python، ووجود Docker CLI، وصيغة تثبيت صورة الإثبات، وحالة المزود المحلي؛ لكنه لا يثبت أن Docker daemon يعمل أو أن الصورة قابلة للسحب. استخدم `docker info` و`docker manifest inspect IMAGE` للتحقق التشغيلي. وللتحقق من الحزمة المنشورة بعيدًا عن ملفات المستودع:
+
+```bash
+uvx --refresh --from "burhan-engine==0.8.1" burhan --version
 ```
 
 وللتطوير المحلي من المستودع:
@@ -66,13 +74,22 @@ burhan repair-proof --project PATH_TO_PROJECT --goal "أثبت الإصلاح" -
 اسحب الصورة المنشورة:
 
 ```bash
-docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.8.0
+docker pull ghcr.io/mwthrc23-ui/burhan-engine:0.8.1
+docker run --rm ghcr.io/mwthrc23-ui/burhan-engine:0.8.1 --version
 ```
+
+بعد النشر، اعرض بصمة الإصدار `0.8.1` غير القابلة للتبدل بالأمر:
+
+```text
+docker buildx imagetools inspect ghcr.io/mwthrc23-ui/burhan-engine:0.8.1
+```
+
+استخدم مرجع البصمة بدل الوسم في البيئات التي تتطلب صورة غير قابلة للتبدل.
 
 ثم شغّل أي أمر `burhan` داخلها (مع mount للمشروع):
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.8.0 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/mwthrc23-ui/burhan-engine:0.8.1 analyze --project examples/python-name-error --goal "شخّص الخطأ" --error-file examples/python-name-error/error.txt
 ```
 
 ## Burhan Evidence Gate للفرق وCI
@@ -107,6 +124,8 @@ burhan ci-gate \
 
 يجب كذلك فصل **أداة بُرهان الموثوقة** عن **المستودع الجاري تحليله**: في workflow المحمي ثبّت نسخة منشورة ومثبتة من `burhan-engine` أو wheel من بناء محمي، ولا تثبّت بُرهان من checkout الخاص بالـPR. في البيئات عالية الحساسية استخدم `--require-hashes` مع بصمة wheel المنشورة.
 
+لا تحتوي حزمة `0.8.1` اعتماديات تشغيل خارجية، لذلك يستخدم المثال التالي `--no-deps`. أعد فحص metadata قبل نسخ هذا الخيار إلى إصدار لاحق؛ لا تستخدمه إذا أضيفت اعتماديات مطلوبة.
+
 مثال GitHub Actions مختصر:
 
 ```yaml
@@ -114,7 +133,7 @@ burhan ci-gate \
   env:
     BURHAN_DOCKER_IMAGE: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
   run: |
-    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.8.0"
+    python -m pip install --only-binary=:all: --no-deps "burhan-engine==0.8.1"
     docker pull "$BURHAN_DOCKER_IMAGE"
 - name: Load protected Burhan policy
   env:
@@ -225,7 +244,10 @@ burhan code-tree --project PATH_TO_PROJECT --json
 
 ## ذاكرة الإصلاح
 
-النطاق الأول مقيد عمدًا إلى:
+هناك مساران منفصلان يجب عدم الخلط بينهما:
+
+- `source-search` يفهرس سجلات خامًا ومرشحين عبر أكثر من 11 تصنيف خطأ، لكنها ليست إصلاحات موثقة على مشروع المستخدم.
+- ذاكرة `RepairEpisode` الموثقة وترقيتها مقيدة حاليًا إلى:
 
 ```text
 Python + pytest + AttributeError
@@ -385,9 +407,12 @@ burhan analyze --help
 ## الاختبارات
 
 ```powershell
-$env:PYTHONPATH = "$PWD\src"
-python -m unittest discover -s tests -v
+python -m pytest -q
+python -m coverage run -m pytest -q
+python -m coverage report
 ```
+
+خط الأساس الموثق للإصدار `0.8.1`: **372 اختبارًا ناجحًا**، إضافةً إلى **18 subtest**، وتغطية إجمالية **93%**.
 
 ## نموذج BIR الحالي
 
@@ -422,15 +447,22 @@ python -m unittest discover -s tests -v
 - إثبات Docker الحالي يحتاج صورة تحتوي أداة الاختبار المطلوبة؛ صورة Python الافتراضية مناسبة لاختبارات `python` المباشرة، بينما يحتاج pytest إلى صورة تتضمن pytest.
 - بيانات SWE-bench Verified تحمل رقعة واختبارات معيارية، لكن استيرادها لا يعني أنها نجحت على كود المستخدم الحالي.
 - سجلات BugsInPy غالبًا لا تتضمن وصفًا صريحًا للخطأ أو السبب، ولذلك تبقى `unclassified` حتى المراجعة.
-- لا يوجد نموذج لغوي أو QUBO/Ising backend في هذه النسخة.
+- مزود LLM ما زال stub اختياريًا معطلًا افتراضيًا؛ لا يوجد تكامل نموذج لغوي مكتمل أو QUBO/Ising backend في هذه النسخة.
 - هدف أقل من ثانية يخص أول تشخيص في مشروع ضمن حدود المسح، وليس ضمان حل نهائي لكل مشكلة.
+- بصمات Evidence Gate checksums لكشف التغيير وليست توقيعًا رقميًا أو إثباتًا لهوية المنشئ؛ حماية workflow والسياسة في الفرع الأساسي جزء من نموذج الثقة.
+- `burhan doctor` يتحقق من وجود Docker CLI وصيغة الصورة المثبتة، لكنه لا يفحص جاهزية daemon أو يسحب الصورة.
 
 ## المرحلة التالية
 
 1. استعادة بوابة الترقية بإعادة إثبات `AttributeError` وربط `ProofResult` بالحالة والرقعة، مع سبب من المصدر أو مراجعة بشرية موثقة وإثبات `V2`.
-2. إعادة نتيجة الاختبار إلى BIR كدليل جديد قابل للاسترجاع.
-3. بناء صورة تحقق pytest مثبتة بالاعتماديات وdigest.
-4. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+2. بناء صورة تحقق pytest منشورة ومثبتة بالاعتماديات وdigest بدل قيمة placeholder الحالية.
+3. إضافة فهرسة متزايدة بـTree-sitter وLSP.
+
+## ما الجديد في 0.8.1
+
+- تصحيح `UnicodeEncodeError` في مخرجات `burhan doctor` و`--explain` على طرفيات Windows ذات ترميز `cp1256`.
+- استبدال رموز الحالة الزخرفية بصيغ نصية محمولة مثل `[OK]` و`[WARN]` و`[FAIL]`، واستخدام `->` للاقتراحات.
+- إضافة اختباري انحدار يمران عبر مخرج `cp1256` صارم ويغطيان المسارين المتأثرين.
 
 ## ما الجديد في 0.8.0
 
@@ -477,7 +509,7 @@ python -m unittest discover -s tests -v
 
 ### الاختبارات والتغطية
 
-366 اختبارًا ناجحًا (مع 18 subtest)، تغطية 88%.
+370 اختبارًا ناجحًا (مع 18 subtest)، وتغطية إجمالية 93%.
 
 ### ملاحظة
 
@@ -510,7 +542,7 @@ burhan repair  --project . --goal "أصلح" --error-file err.txt --explain
 ```text
 src/burhan/
 ├── model.py              نماذج BIR الأساسية
-├── scanner.py            مسح المشروع متزايد
+├── scanner.py            مسح المشروع الآمن والمحدود
 ├── analyzer.py           تشخيص الأخطاء
 ├── patcher.py            إنشاء الرقعة وإثباتها
 ├── policy.py             سياسات CI Gate
