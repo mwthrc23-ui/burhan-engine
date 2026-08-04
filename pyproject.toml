@@ -8,9 +8,9 @@ version = "0.9.0"
 description = "Evidence-first semantic diagnosis for source code"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "AGPL-3.0-only"
+license = "LicenseRef-Custom-Attribution"
 license-files = ["LICENSE"]
-authors = [{ name = "Burhan" }]
+authors = [{ name = "mwthrc23-ui" }]
 dependencies = []
 keywords = ["diagnostics", "cli", "analysis", "repair", "developer-tools"]
 classifiers = [

@@ -3,7 +3,7 @@
 [![CI](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/mwthrc23-ui/burhan-engine/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/burhan-engine.svg)](https://pypi.org/project/burhan-engine/)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: Custom Attribution](https://img.shields.io/badge/License-Custom_Attribution-orange.svg)](LICENSE)
 [![Container](https://img.shields.io/badge/GHCR-burhan--engine-2496ED?logo=docker&logoColor=white)](https://github.com/users/mwthrc23-ui/packages/container/package/burhan-engine)
 
 **Evidence-first software diagnosis and repair verification for Python and TypeScript.**
@@ -24,7 +24,9 @@ burhan doctor
 
 تضيف النسخة `0.9.0` بنشمارك تشخيصيًا قابلًا للتكرار، وفهرسة متزايدة، وعائلات تشخيص أعمق لـKeyError وasync وTypeScript، ونماذج شهادة V3 وحماية إضافية لمدخلات مزود الذكاء. التحليل يعمل محليًا ولا يرسل ملفات مشروعك إلى أي خدمة، ومزود LLM الاختياري ما زال stub معطلًا افتراضيًا.
 
-حقوق النشر © 2026 مساهمو Burhan Engine. بُرهان برنامج حر ومفتوح المصدر مرخص بموجب `AGPL-3.0-only`. إذا وزعت نسخة معدلة، أو أتحت نسخة معدلة ليتفاعل معها المستخدمون عبر شبكة، فيجب أن تتيح لهم المصدر المقابل لتلك النسخة وفق شروط [الترخيص](LICENSE).
+هذا المشروع متاح للعرض والاستخدام بشرط الإسناد الواضح — مشغّل بواسطة mwthrc23-ui أو مبني على عمل mwthrc23-ui. الاستخدام التجاري يتطلب إذناً كتابياً. راجع ملف [LICENSE](LICENSE) للتفاصيل الكاملة.
+
+حقوق النشر © ٢٠٢٦ mwthrc23-ui. جميع الحقوق محفوظة.
 
 ## البدء السريع (أسهل طريق)
 
